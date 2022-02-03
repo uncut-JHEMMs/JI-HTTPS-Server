@@ -30,3 +30,9 @@
 *.exe
 *.out
 *.app
+
+# Certificates and/or Keys
+*.crt
+*.pem
+*.csr
+*.key
