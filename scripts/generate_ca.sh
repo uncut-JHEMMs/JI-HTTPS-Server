@@ -9,7 +9,7 @@ USE_CONFIG=0
 CONFIG_FILE=""
 # Name of the certificate and key to generate
 CERT_NAME="root"
-# Whether or not to change the file permissions to 700 (off by default)
+# Whether or not to change the file permissions to 600 (off by default)
 PROTECT_CERT=0
 # Whether or not to run a test on the generated key
 RUN_TEST=0
@@ -28,7 +28,7 @@ help () {
     echo "  -n, --name           name of the private key and certificate."
     echo "                         (defaults to root.pem and root.crt)"
     echo "  -p, --protect        sets the permissions of the generated files to"
-    echo "                         700 to protect them from being read by other"
+    echo "                         600 to protect them from being read by other"
     echo "                         users on the system."
     echo "  -t, --test           runs a test on the generated certificate to"
     echo "                         make sure it's ready for signing."
@@ -81,8 +81,8 @@ else
 fi
 
 if [ $PROTECT_CERT -eq 1 ]; then
-    chmod 700 "$OUTPUT_DIR/$CERT_NAME.pem"
-    chmod 700 "$OUTPUT_DIR/$CERT_NAME.crt"
+    chmod 600 "$OUTPUT_DIR/$CERT_NAME.pem"
+    chmod 600 "$OUTPUT_DIR/$CERT_NAME.crt"
 fi
 
 echo $OUTPUT_DIR/$CERT_NAME.pem and $OUTPUT_DIR/$CERT_NAME.crt successfully generated!
