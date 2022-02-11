@@ -89,7 +89,7 @@ sed -i "s|%%DIRECTORY%%|$OUTPUT_DIR|g" $CONFIG_FILE
 sed -i "s|%%NAME%%|$CERT_NAME|g" $CONFIG_FILE
 sed -i "s|%%BASE_URL%%|$BASE_URL|g" $CONFIG_FILE
 
-echo Generating a root Private Key and CA Request...
+echo Generating a server Private Key and CA Request...
 if ! openssl req -new -config $CONFIG_FILE -out "$OUTPUT_DIR/$CERT_NAME.csr" -keyout "$OUTPUT_DIR/$CERT_NAME/private/$CERT_NAME.pem"; then
     echo Failed to generate a private key or CA request!
     exit 1
