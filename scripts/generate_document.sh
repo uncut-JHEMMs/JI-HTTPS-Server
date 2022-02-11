@@ -4,9 +4,9 @@
 OUTPUT_DIR="$(pwd)/ca"
 
 # The config file to be used
-CONFIG_FILE="`dirname $(readlink -f $0)`/config/server.cfg"
+CONFIG_FILE="`dirname $(readlink -f $0)`/config/document.cfg"
 # Name of the certificate and key to generate
-CERT_NAME="server"
+CERT_NAME="document"
 # Whether or not to change the file permissions to 600 (off by default)
 PROTECT_CERT=0
 # Whether or not to run a test on the generated key
@@ -18,7 +18,7 @@ ROOT_NAME="root"
 
 help () {
     echo "Usage: $0 [OPTIONS]..."
-    echo "Generates a Server CA Private Key and Certificate File."
+    echo "Generates a Document CA Private Key and Certificate File."
     echo "By default theses files are placed in the current working directory."
     echo "But you can optionally pass a directory to to place the files."
     echo
@@ -68,14 +68,21 @@ if [ ! -d $OUTPUT_DIR ]; then
 fi
 
 OUTPUT_DIR=$(readlink -f $OUTPUT_DIR)
+CERT_DIR=$OUTPUT_DIR/$CERT_NAME
+ROOT_DIR=$OUTPUT_DIR/$ROOT_NAME
 
-# NOTE: I utilize '$OUTPUT_DIR/$CERT_NAME/' a lot, maybe I should put it in a variable?
+if [ ! -d $ROOT_DIR ]; then
+    echo "Specified root certificate name doesn't have a directory associated with it in $OUTPUT_DIR!"
+    echo "Have you tried running 'generate_root.sh -o $OUTPUT_DIR -n $ROOT_NAME'?"
+    exit 1
+fi
+
 echo Generating certificate directory structure under $OUTPUT_DIR...
 mkdir -pv $OUTPUT_DIR{/crl,/certs}
-mkdir -pv $OUTPUT_DIR/$CERT_NAME{/private,/db}
+mkdir -pv $CERT_DIR{/private,/db}
 
-echo Generating required database files under $OUTPUT_DIR/$CERT_NAME/db
-pushd $OUTPUT_DIR/$CERT_NAME/db
+echo Generating required database files under $CERT_DIR/db
+pushd $CERT_DIR/db
 cp /dev/null $CERT_NAME.db
 cp /dev/null $CERT_NAME.db.attr
 echo 01 > $CERT_NAME.crt.srl
@@ -83,21 +90,21 @@ echo 01 > $CERT_NAME.crl.srl
 popd
 
 echo Expanding variables in config file...
-cp $CONFIG_FILE $OUTPUT_DIR/$CERT_NAME/openssl.cfg
-CONFIG_FILE=$OUTPUT_DIR/$CERT_NAME/openssl.cfg
+cp $CONFIG_FILE $CERT_DIR/openssl.cfg
+CONFIG_FILE=$CERT_DIR/openssl.cfg
 sed -i "s|%%DIRECTORY%%|$OUTPUT_DIR|g" $CONFIG_FILE
 sed -i "s|%%NAME%%|$CERT_NAME|g" $CONFIG_FILE
 sed -i "s|%%BASE_URL%%|$BASE_URL|g" $CONFIG_FILE
 
-echo Generating a server Private Key and CA Request...
-if ! openssl req -new -config $CONFIG_FILE -out "$OUTPUT_DIR/$CERT_NAME.csr" -keyout "$OUTPUT_DIR/$CERT_NAME/private/$CERT_NAME.pem"; then
+echo Generating a document Private Key and CA Request...
+if ! openssl req -new -config $CONFIG_FILE -out "$OUTPUT_DIR/$CERT_NAME.csr" -keyout "$CERT_DIR/private/$CERT_NAME.pem"; then
     echo Failed to generate a private key or CA request!
     exit 1
 fi
-echo Successfully generated $OUTPUT_DIR/$CERT_NAME.csr and $OUTPUT_DIR/$CERT_NAME/private/$CERT_NAME.pem!
+echo Successfully generated $OUTPUT_DIR/$CERT_NAME.csr and $CERT_DIR/private/$CERT_NAME.pem!
 
 echo Using generated CA Request to make a certificate...
-if ! openssl ca -config $OUTPUT_DIR/$ROOT_NAME/openssl.cfg -in "$OUTPUT_DIR/$CERT_NAME.csr" -out "$OUTPUT_DIR/$CERT_NAME.crt" -extensions "signing_ca_ext"
+if ! openssl ca -config $ROOT_DIR/openssl.cfg -in "$OUTPUT_DIR/$CERT_NAME.csr" -out "$OUTPUT_DIR/$CERT_NAME.crt" -extensions "signing_ca_ext"
 then
     echo Failed to generate a certificate!
     exit 1
@@ -125,6 +132,6 @@ fi
 
 if [ $PROTECT_CERT -eq 1 ]; then
     echo Protecting generated keys and certificate...
-    chmod -v 400 "$OUTPUT_DIR/$CERT_NAME/private/$CERT_NAME.pem"
+    chmod -v 400 "$CERT_DIR/private/$CERT_NAME.pem"
     chmod -v 444 "$OUTPUT_DIR/$CERT_NAME.crt"
 fi
