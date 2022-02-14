@@ -1,8 +1,5 @@
 #!/bin/env bash
 
-# TODO: As some point it might be nice to try and only ask for the password
-#       for the root certificate once. But I have to look into that later.
-
 # Directory to place Private Key and Cert files. (default: current working directory)
 OUTPUT_DIR="$(pwd)/ca"
 
@@ -60,6 +57,19 @@ while [ "$#" -gt 0 ]; do
     esac
 done
 
+export ROOT_PASS
+read -s -p "Enter a password to protect the private key with: " ROOT_PASS_firstpass
+echo
+read -s -p "Please confirm the password: " ROOT_PASS_secondpass
+echo
+
+if [ "$ROOT_PASS_firstpass" != "$ROOT_PASS_secondpass" ]; then
+    echo "Failed to verify password! Confirmation didn't match first input!"
+    exit 1
+fi
+
+ROOT_PASS=$ROOT_PASS_firstpass
+
 if [ ! -d $OUTPUT_DIR ]; then
     mkdir -p $OUTPUT_DIR
 fi
@@ -87,7 +97,7 @@ sed -i "s|%%NAME%%|$CERT_NAME|g" $CONFIG_FILE
 sed -i "s|%%BASE_URL%%|$BASE_URL|g" $CONFIG_FILE
 
 echo Generating a root Private Key and CA Request...
-if ! openssl req -new -config $CONFIG_FILE -out "$OUTPUT_DIR/$CERT_NAME.csr" -keyout "$OUTPUT_DIR/$CERT_NAME/private/$CERT_NAME.pem"; then
+if ! openssl req -new -config $CONFIG_FILE -out "$OUTPUT_DIR/$CERT_NAME.csr" -keyout "$OUTPUT_DIR/$CERT_NAME/private/$CERT_NAME.pem" -passout env:ROOT_PASS; then
     echo Failed to generate a private key or CA request!
     exit 1
 fi
@@ -95,7 +105,7 @@ echo Successfully generated $OUTPUT_DIR/$CERT_NAME.csr and $OUTPUT_DIR/$CERT_NAM
 
 # TODO: Find some way to parameterize the enddate flag
 echo Using generated CA Request to make a self-signed certificate...
-if ! openssl ca -selfsign -config $CONFIG_FILE -in "$OUTPUT_DIR/$CERT_NAME.csr" -out "$OUTPUT_DIR/$CERT_NAME.crt" -extensions "root_ca_ext" -enddate 20301231235959Z
+if ! openssl ca -selfsign -config $CONFIG_FILE -in "$OUTPUT_DIR/$CERT_NAME.csr" -out "$OUTPUT_DIR/$CERT_NAME.crt" -extensions "root_ca_ext" -enddate 20301231235959Z -passin env:ROOT_PASS
 then
     echo Failed to generate a certificate!
     exit 1
@@ -103,7 +113,7 @@ fi
 echo Successfully generated $OUTPUT_DIR/$CERT_NAME.crt!
 
 echo Creating an empty CRL...
-if ! openssl ca -gencrl -config $CONFIG_FILE -out "$OUTPUT_DIR/crl/$CERT_NAME.crl"; then
+if ! openssl ca -gencrl -config $CONFIG_FILE -out "$OUTPUT_DIR/crl/$CERT_NAME.crl" -passin env:ROOT_PASS; then
     echo Failed to create a empty CRL!
 fi
 echo Successfully created empty CRL!
