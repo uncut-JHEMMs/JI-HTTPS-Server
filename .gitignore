@@ -36,3 +36,6 @@
 *.pem
 *.csr
 *.key
+
+# Build directory
+build/
