@@ -1,3 +1,4 @@
+#define HAVE_GNUTLS
 #include <httpserver.hpp>
 #include <nlohmann/json.hpp>
 #include <filesystem>
@@ -25,6 +26,9 @@ public:
     }
 };
 
+// TODO(Jordan): Move this region to it's own file.
+//============================================================================================
+
 /**
  * A structure containing all of the configurable options of the server.
  *
@@ -47,13 +51,17 @@ struct ServerOptions
     int timeout;
     bool use_ipv6;
     bool use_ipv4;
+    std::string certificate;
+    std::string privateKey;
 
-    ServerOptions(int port = 8080, int max_connections = -1, int timeout = 180, bool use_ipv6 = false, bool use_ipv4 = true) :
+    ServerOptions(int port = 8080, int max_connections = -1, int timeout = 180, bool use_ipv6 = false, bool use_ipv4 = true, std::string certificate = "", std::string privateKey = "") :
         port(port),
         max_connections(max_connections),
         timeout(timeout),
         use_ipv6(use_ipv6),
-        use_ipv4(use_ipv4)
+        use_ipv4(use_ipv4),
+        certificate(certificate),
+        privateKey(privateKey)
     {}
 };
 
@@ -65,7 +73,9 @@ struct ServerOptions
  *   "connections": int,
  *   "timeout": int,
  *   "ipv6": bool,
- *   "ipv4": bool
+ *   "ipv4": bool,
+ *   "certificate": string,
+ *   "privateKey": string
  * }
  */
 ServerOptions parse_options_from_file(const fs::path& file)
@@ -74,7 +84,16 @@ ServerOptions parse_options_from_file(const fs::path& file)
     nlohmann::json j;
     i >> j;
 
-    return { j["port"].get<int>(), j["connections"].get<int>(), j["timeout"].get<int>(), j["ipv6"].get<bool>(), j["ipv4"].get<bool>() };
+    return
+    {
+        j["port"].get<int>(),
+        j["connections"].get<int>(),
+        j["timeout"].get<int>(),
+        j["ipv6"].get<bool>(),
+        j["ipv4"].get<bool>(),
+        j["certificate"].get<std::string>(),
+        j["privateKey"].get<std::string>()
+    };
 }
 
 ServerOptions parse_options(int argc, char** argv)
@@ -94,9 +113,12 @@ ServerOptions parse_options(int argc, char** argv)
     options.timeout = env::get_int("UTOPIA_TIMEOUT", options.timeout);
     options.use_ipv4 = env::get_bool("UTOPIA_USE_IPV4", options.use_ipv4);
     options.use_ipv6 = env::get_bool("UTOPIA_USE_IPV6", options.use_ipv6);
+    options.certificate = env::get_string("UTOPIA_CERTIFICATE", options.certificate);
+    options.privateKey = env::get_string("UTOPIA_PRIVATE_KEY", options.privateKey);
 
     popl::OptionParser op("OPTIONS");
     auto help_opt = op.add<popl::Switch>("h", "help", "show this message");
+    auto conf_opt = op.add<popl::Value<std::string>>("i", "config", "config file to use");
     auto port_opt = op.add<popl::Value<int>>("p", "port", "port to start the server on");
     auto conn_opt = op.add<popl::Value<int>>("c", "connections", "maximum connections to allow");
     auto time_opt = op.add<popl::Value<int>>("t", "timeout", "seconds of inactivity before connection is timed out");
@@ -104,6 +126,8 @@ ServerOptions parse_options(int argc, char** argv)
     auto ipv6_opt = op.add<popl::Switch>("6", "use-ipv6", "allow IPv6 connections");
     auto noipv4_opt = op.add<popl::Switch>("", "no-ipv4", "disallow IPv4 connections");
     auto noipv6_opt = op.add<popl::Switch>("", "no-ipv6", "disallow IPv6 connections");
+    auto cert_opt = op.add<popl::Value<std::string>>("C", "cert", "certificate to authenticate with");
+    auto key_opt = op.add<popl::Value<std::string>>("K", "key", "private key for the certificate");
     op.parse(argc, argv);
 
     if (help_opt->is_set())
@@ -114,8 +138,21 @@ ServerOptions parse_options(int argc, char** argv)
         std::exit(EXIT_SUCCESS);
     }
 
+    if (conf_opt->is_set() && fs::exists(conf_opt->value()))
+        options = parse_options_from_file(conf_opt->value());
+
     if ((ipv4_opt->is_set() && noipv4_opt->is_set()) || (ipv6_opt->is_set() && noipv6_opt->is_set()))
         throw std::invalid_argument("ipv4/6 is both set and unset!");
+
+    if (cert_opt->is_set() != key_opt->is_set())
+    {
+        throw std::invalid_argument("--cert and --key must be both set or unset!");
+    }
+    else if (cert_opt->is_set())
+    {
+        options.certificate = cert_opt->value();
+        options.privateKey = key_opt->value();
+    }
 
     if (port_opt->is_set())
         options.port = port_opt->value();
@@ -138,8 +175,12 @@ ServerOptions parse_options(int argc, char** argv)
     if (!options.use_ipv4 && !options.use_ipv6)
         throw std::invalid_argument("both ipv4 and ipv6 are disallowed, so no connections can be made!");
 
+    if (options.certificate.empty() || options.privateKey.empty())
+        throw std::invalid_argument("A certificate and private key must be given for authentication!");
+
     return options;
 }
+//========================================================================
 
 int main(int argc, char** argv)
 {
@@ -147,8 +188,18 @@ int main(int argc, char** argv)
 
     auto builder = create_webserver()
         .port(opts.port)
+        .use_ssl()
+        .https_mem_key(opts.privateKey)
+        .https_mem_cert(opts.certificate)
+        .cred_type(http::http_utils::CERTIFICATE)
         .max_connections(opts.max_connections)
-        .connection_timeout(opts.timeout);
+        .connection_timeout(opts.timeout)
+        .log_access([](const auto& url) {
+                std::cout << "ACCESSING: " << url << std::endl;
+        })
+        .log_error([](const auto& err) {
+                std::cout << "ERROR: " << err << std::endl;
+        });
 
     /**
      * There is no option to turn off IPv4, likely as a safety measure
