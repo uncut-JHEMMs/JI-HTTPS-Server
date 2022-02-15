@@ -63,6 +63,19 @@ while [ "$#" -gt 0 ]; do
     esac
 done
 
+export SERVER_PASS
+read -s -p "Enter a password to protect the private key with: " SERVER_PASS_firstpass; echo
+read -s -p "Please confirm the password: " SERVER_PASS_secondpass; echo
+
+if [ "$SERVER_PASS_firstpass" != "$SERVER_PASS_secondpass" ]; then
+    echo "Failed to verify password! Confirmation didn't match first input!"
+    exit 1
+fi
+SERVER_PASS=$SERVER_PASS_firstpass
+
+export ROOT_PASS
+read -s -p "Please enter the password for the root private key: " ROOT_PASS; echo
+
 if [ ! -d $OUTPUT_DIR ]; then
     mkdir -p $OUTPUT_DIR
 fi
@@ -90,14 +103,14 @@ sed -i "s|%%NAME%%|$CERT_NAME|g" $CONFIG_FILE
 sed -i "s|%%BASE_URL%%|$BASE_URL|g" $CONFIG_FILE
 
 echo Generating a server Private Key and CA Request...
-if ! openssl req -new -config $CONFIG_FILE -out "$OUTPUT_DIR/$CERT_NAME.csr" -keyout "$OUTPUT_DIR/$CERT_NAME/private/$CERT_NAME.pem"; then
+if ! openssl req -new -config $CONFIG_FILE -out "$OUTPUT_DIR/$CERT_NAME.csr" -keyout "$OUTPUT_DIR/$CERT_NAME/private/$CERT_NAME.pem" -passout env:SERVER_PASS; then
     echo Failed to generate a private key or CA request!
     exit 1
 fi
 echo Successfully generated $OUTPUT_DIR/$CERT_NAME.csr and $OUTPUT_DIR/$CERT_NAME/private/$CERT_NAME.pem!
 
 echo Using generated CA Request to make a certificate...
-if ! openssl ca -config $OUTPUT_DIR/$ROOT_NAME/openssl.cfg -in "$OUTPUT_DIR/$CERT_NAME.csr" -out "$OUTPUT_DIR/$CERT_NAME.crt" -extensions "signing_ca_ext"
+if ! openssl ca -config $OUTPUT_DIR/$ROOT_NAME/openssl.cfg -in "$OUTPUT_DIR/$CERT_NAME.csr" -out "$OUTPUT_DIR/$CERT_NAME.crt" -extensions "signing_ca_ext" -passin env:ROOT_PASS
 then
     echo Failed to generate a certificate!
     exit 1
@@ -105,7 +118,7 @@ fi
 echo Successfully generated $OUTPUT_DIR/$CERT_NAME.crt!
 
 echo Creating an empty CRL...
-if ! openssl ca -gencrl -config $CONFIG_FILE -out "$OUTPUT_DIR/crl/$CERT_NAME.crl"; then
+if ! openssl ca -gencrl -config $CONFIG_FILE -out "$OUTPUT_DIR/crl/$CERT_NAME.crl" -passin env:SERVER_PASS; then
     echo Failed to create a empty CRL!
 fi
 echo Successfully created empty CRL!
