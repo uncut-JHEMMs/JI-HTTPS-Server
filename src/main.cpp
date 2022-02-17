@@ -21,13 +21,24 @@ using namespace httpserver;
 template<class T>
 using Ref = std::shared_ptr<T>;
 
-// TODO(Jordan): Replace this example stub with actual resources.
-class hello_world_resource : public http_resource
+#define MY_OPAQUE "11733b200778ce33060f31c9af70a870ba96ddd4"
+
+class digest_test_resource : public http_resource
 {
 public:
-    const Ref<http_response> render(const http_request&)
+    const Ref<http_response> render_GET(const http_request& req)
     {
-        return Ref<http_response>(new string_response("Hello, world!"));
+        if (req.get_digested_user().empty())
+        {
+            return Ref<digest_auth_fail_response>(new digest_auth_fail_response("FAIL", "test@localhost", MY_OPAQUE, true));
+        }
+        else
+        {
+            bool reload_nonce = false;
+            if (!req.check_digest_auth("test@localhost", "mypass", 300, &reload_nonce))
+                return Ref<digest_auth_fail_response>(new digest_auth_fail_response("FAIL", "test@localhost", MY_OPAQUE, reload_nonce));
+        }
+        return Ref<http_response>(new string_response("SUCCESS", 200, "text/plain"));
     }
 };
 
@@ -38,6 +49,7 @@ void monitor_performance(std::condition_variable& cv)
 
     std::mutex mtx;
     std::unique_lock<std::mutex> lck(mtx);
+
     /**
      * This is some simple performance information, since
      * at the moment I don't have a full-fledge performance
@@ -75,6 +87,7 @@ int main(int argc, const char** argv)
         .https_mem_key(opts.privateKey)
         .https_mem_cert(opts.certificate)
         .cred_type(http::http_utils::CERTIFICATE)
+        .digest_auth()
         .start_method(http::http_utils::INTERNAL_SELECT)
         .max_threads(20)
         .max_connections(opts.max_connections)
@@ -106,8 +119,8 @@ int main(int argc, const char** argv)
     signal(SIGINT, signal_callback_handler);
 
     webserver ws = builder;
-    hello_world_resource hwr;
-    ws.register_resource("/helloworld", &hwr);
+    digest_test_resource hwr;
+    ws.register_resource("/test_digest", &hwr);
     ws.start(false);
 
     std::condition_variable cv;
