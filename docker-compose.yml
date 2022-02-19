@@ -1,6 +1,21 @@
-version: "0.1"
+version: "2.1"
 services:
   server:
     build: .
     ports:
       - "8080:8080"
+    networks:
+      server_net:
+        ipv4_address: 172.16.238.10
+        ipv6_address: 2001:3984:3984::10
+networks:
+  server_net:
+    enable_ipv6: true
+    driver: bridge
+    ipam:
+      driver: default
+      config:
+        - subnet: 172.16.238.0/24
+          gateway: 172.16.238.1
+        - subnet: 2001:3984:3984::/64
+          gateway: 2001:3984:3984::1
