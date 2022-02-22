@@ -19,12 +19,14 @@
 struct ServerOptions
 {
     uint16_t port = 8080;
-    int max_connections = 0;
-    int timeout = 180;
+    uint16_t max_connections = 0;
+    uint16_t timeout = 180;
+    uint16_t max_threads = 1;
+    bool thread_per_connection = false;
     bool use_ipv6 = false;
     bool use_ipv4 = true;
     std::string certificate;
-    std::string privateKey;
+    std::string private_key;
 };
 
 /**

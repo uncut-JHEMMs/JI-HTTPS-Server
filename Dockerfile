@@ -9,7 +9,8 @@ RUN dnf install -y \
     libtool \
     ninja-build \
     libmicrohttpd-devel \
-    gnutls-devel
+    gnutls-devel \
+    spdlog
 
 ENV CC=clang
 ENV CXX=clang++

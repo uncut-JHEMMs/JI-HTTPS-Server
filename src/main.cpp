@@ -11,6 +11,9 @@
 #include <ctime>
 #include <signal.h>
 
+#include <spdlog/spdlog.h>
+#include <spdlog/sinks/stdout_color_sinks.h>
+
 #include "server_opts.hpp"
 
 static std::atomic_int accesses{0};
@@ -84,22 +87,25 @@ int main(int argc, const char** argv)
     auto builder = create_webserver()
         .port(opts.port)
         .use_ssl()
-        .https_mem_key(opts.privateKey)
+        .https_mem_key(opts.private_key)
         .https_mem_cert(opts.certificate)
         .cred_type(http::http_utils::CERTIFICATE)
         .digest_auth()
-        .start_method(http::http_utils::INTERNAL_SELECT)
-        .max_threads(20)
         .max_connections(opts.max_connections)
         .connection_timeout(opts.timeout)
         .log_access([](const auto& url) {
                 accesses++;
-                std::cout << "ACCESSING: " << url << std::endl;
+                spdlog::get("console")->info("ACCESSING: {}", url);
         })
         .log_error([](const auto& err) {
                 errors++;
-                std::cout << "ERROR: " << err << std::endl;
+                spdlog::get("stderr")->error("ERROR: {}", err);
         });
+
+    if (opts.thread_per_connection)
+        builder.start_method(http::http_utils::THREAD_PER_CONNECTION);
+    else
+        builder.start_method(http::http_utils::INTERNAL_SELECT).max_threads(opts.max_threads);
 
     /**
      * There is no option to turn off IPv4, likely as a safety measure
@@ -117,6 +123,10 @@ int main(int argc, const char** argv)
     // Catching Ctrl-C (SIGINT) so I can gracefully shutdown, it's not
     // the prettiest way, but it works.
     signal(SIGINT, signal_callback_handler);
+
+    // Creating some global logs
+    spdlog::stdout_color_mt("console");
+    spdlog::stderr_color_mt("stderr");
 
     webserver ws = builder;
     digest_test_resource hwr;
