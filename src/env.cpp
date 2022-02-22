@@ -10,9 +10,14 @@ namespace env
     std::optional<std::string> get_string(const char* name)
     {
         if (const char* x = std::getenv(name))
-            return std::string{x};
-        else
-            return {};
+        {
+            std::string res = x;
+            if (res.empty())
+                return {};
+            return res;
+        }
+
+        return {};
     }
 
     std::string get_string(const char* name, std::string def)
@@ -45,17 +50,17 @@ namespace env
         return get_bool(name).value_or(def);
     }
 
-    std::optional<int> get_int(const char* name)
+    std::optional<uint16_t> get_int(const char* name)
     {
         if (auto optstr = get_string(name); optstr && is_integer(*optstr))
         {
-            return std::stoi(*optstr);
+            return (uint16_t)std::stoul(*optstr);
         }
 
         return {};
     }
 
-    int get_int(const char* name, int def)
+    uint16_t get_int(const char* name, uint16_t def)
     {
         return get_int(name).value_or(def);
     }
