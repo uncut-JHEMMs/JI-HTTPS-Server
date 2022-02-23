@@ -9,7 +9,8 @@ RUN dnf install -y \
     libtool \
     ninja-build \
     libmicrohttpd-devel \
-    gnutls-devel
+    gnutls-devel \
+    spdlog-devel
 
 ENV CC=clang
 ENV CXX=clang++
@@ -33,7 +34,7 @@ RUN cmake --install . --config ${BUILD_TYPE} --prefix /usr
 
 COPY . /docker_build
 WORKDIR /docker_build/build
-RUN cmake -G Ninja -DCMAKE_BUILD_TYPE=${BUILD_TYPE} -DCMAKE_MODULE_PATH=/usr/lib64/cmake/nlohmann_json ..
+RUN cmake -G Ninja -DCMAKE_BUILD_TYPE=${BUILD_TYPE} -DCMAKE_MODULE_PATH=/usr/lib64/cmake/nlohmann_json:/usr/lib64/ ..
 RUN cmake --build . --config ${BUILD_TYPE} -j
 RUN mkdir /server
 RUN cp /docker_build/build/bin/${BUILD_TYPE}/ /server/bin -r

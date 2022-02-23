@@ -97,9 +97,10 @@ target_compile_options(${PROJECT_NAME} PUBLIC ${PROJECT_WARNINGS})
 
 find_package(Threads REQUIRED)
 find_package(nlohmann_json REQUIRED)
+find_package(spdlog REQUIRED)
 find_package(PkgConfig REQUIRED)
 pkg_check_modules(LIBHTTPSERVER REQUIRED libhttpserver)
 
-target_link_libraries(${PROJECT_NAME} ${LIBHTTPSERVER_LIBRARIES} nlohmann_json::nlohmann_json Threads::Threads)
+target_link_libraries(${PROJECT_NAME} ${LIBHTTPSERVER_LIBRARIES} spdlog::spdlog nlohmann_json::nlohmann_json Threads::Threads)
 target_include_directories(${PROJECT_NAME} PUBLIC ${LIBHTTPSERVER_INCLUDE_DIRS} PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
 target_compile_options(${PROJECT_NAME} PUBLIC ${LIBHTTPSERVER_CFLAGS_OTHER})
