@@ -37,5 +37,8 @@
 *.csr
 *.key
 
+# Configuration files
+*.json
+
 # Build directory
 build/
