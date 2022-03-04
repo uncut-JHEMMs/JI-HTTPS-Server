@@ -10,7 +10,12 @@ RUN dnf install -y \
     ninja-build \
     libmicrohttpd-devel \
     gnutls-devel \
-    spdlog-devel
+    spdlog-devel \
+    procps-ng \
+    jq \
+    valgrind \
+    gnuplot \
+    vim
 
 ENV CC=clang
 ENV CXX=clang++
