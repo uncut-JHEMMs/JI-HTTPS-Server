@@ -62,6 +62,15 @@ public:
     }
 };
 
+class simple_resource : public http_resource
+{
+public:
+    const Ref<http_response> render_GET(const http_request&)
+    {
+        return Ref<http_response>(new string_response("", 200, "text/plain"));
+    }
+};
+
 void monitor_performance(std::condition_variable& cv)
 {
     std::ofstream out("perf.log", std::ios::ate);
@@ -147,8 +156,10 @@ int main(int argc, const char** argv)
     webserver ws = builder;
     digest_test_resource hwr;
     test_resource tr;
+    simple_resource sr;
     ws.register_resource("/test_digest", &hwr);
     ws.register_resource("/service", &tr, true);
+    ws.register_resource("/test", &sr, false);
 
     spdlog::get("console")->info("Starting server on port {}...", opts.port);
     ws.start(false);
