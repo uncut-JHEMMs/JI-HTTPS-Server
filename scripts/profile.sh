@@ -86,7 +86,7 @@ wait_for() {
     _timeout=$2
     _signal=$3
 
-    if [ -n $_signal ]; then
+    if [[ -z "$_signal" ]]; then
         _signal=KILL
     fi
 
@@ -94,18 +94,21 @@ wait_for() {
 
     kill -s 0 $_process &>/dev/null
     while [ $? -eq 0 ]; do
-        if [ -n $_timeout ] && [ $_counter -ge $_timeout ]; then
-            cprint "\ATimeout reached while waiting for PID $_process to end, sending SIG$_signal to process.\R"
-            kill -$_signal $_process
-            _counter=0
+        if [[ -n "$_timeout" ]]; then
+            if [[ $_counter -ge $_timeout ]]; then
+                cprint "\ATimeout reached while waiting for PID $_process to end, sending SIG$_signal to process.\R"
+                kill -$_signal $_process
+                _counter=0
+            fi
         fi
 
         sleep 1
-        kill -s 0 $_process &>/dev/null
 
-        if [ -n $_timeout ]; then
-            _counter+=1
+        if [[ -n "$_timeout" ]]; then
+            ((_counter+=1))
         fi
+        
+        kill -s 0 $_process &>/dev/null
     done
 }
 
