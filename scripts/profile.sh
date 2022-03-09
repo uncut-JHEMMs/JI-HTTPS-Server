@@ -202,7 +202,7 @@ resource_monitor() {
     wait_for $MONITOR_PID
 
     cprint "\APlotting data from $_program...\R"
-    gnuplot -e "set terminal x11; set title \"Memory Usage of $_program\"; set xlabel \"Time in Seconds\"; set ylabel \"Memory Usage in Bytes\"; set style fill solid 1.0; plot \"$_file\" smooth freq with fillsteps" -p
+    gnuplot -e "set terminal png size 600,400; set output \"$OUT_DIR/$(basename $_program)_graph.png\"; set title \"Memory Usage of $_program\"; set xlabel \"Time in Seconds\"; set ylabel \"Memory Usage in Bytes\"; set style fill solid 1.0; plot \"$_file\" smooth freq with fillsteps" -p
 }
 
 network_information() {
@@ -355,20 +355,20 @@ if [ $REMOTE -eq 0 ]; then
     echo
 
     cprint "\ACalculating average latency of the server...\R"
-    _avlat=$(average_latency $1)
+    _avlat=$(average_latency $PROGRAM)
     cprint "  \BNetwork Type\R: \H$NETINF\R"
     cprint "  \BAverage Latency\R: \H${_avlat}ms\R"
 
-    _base="$OUT_DIR/$(basename $1)"
-    valgrind_run cachegrind $1 --branch-sim=yes --cachegrind-out-file="$_base.cachegrind"
-    valgrind_run callgrind $1  --callgrind-out-file="$_base.callgrind"
-    valgrind_run massif $1 --massif-out-file="$_base.massif"
-    valgrind_run memcheck $1 --xtree-memory=full --xtree-memory-file="$_base.xtree"
+    _base="$OUT_DIR/$(basename $PROGRAM)"
+    valgrind_run cachegrind $PROGRAM --branch-sim=yes --cachegrind-out-file="$_base.cachegrind"
+    valgrind_run callgrind $PROGRAM  --callgrind-out-file="$_base.callgrind"
+    valgrind_run massif $PROGRAM --massif-out-file="$_base.massif"
+    valgrind_run memcheck $PROGRAM --xtree-memory=full --xtree-memory-file="$_base.xtree"
 
     cprint "\AAnnotating callgraph from valgrind into\R '\B$_base.callgrind.annotated\R'\A...\R"
     callgrind_annotate --auto=yes --inclusive=yes --sort=curB:100,curBk:100 "$_base.xtree" > "$_base.callgrind.annotated"
 
-    resource_monitor $1
+    resource_monitor $PROGRAM
 else
     cprint "\E--remote enabled, assuming server isn't on this system and ignoring hardware.\R"
     cprint "\ACalculating average latency of the server...\R"
