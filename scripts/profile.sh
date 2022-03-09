@@ -3,8 +3,10 @@
 SCRIPT_DIR="$(dirname ${BASH_SOURCE[0]})"
 REPO_ROOT="$SCRIPT_DIR/.."
 
+# Provides the `cprint` and `print_opt` functions
 source "$SCRIPT_DIR/utils/colors.sh"
 
+# Checks that all the tools used in the script exist on the system
 requirements() {
     for cmd in grep cut sed lscpu free awk xargs jq valgrind curl gnuplot ip getent
     do
@@ -39,19 +41,6 @@ cpu_utilization() {
     echo $_query1 $_query2 | awk '{ print ($3-$1) * 100 / ($4-$2) }' | xargs printf "%.2f%%"
 }
 
-# Reads value at key $1 from config.json
-# and prints it, or print $2 if the key
-# doesn't exist
-config_value() {
-    _cfg="$(dirname ${BASH_SOURCE[0]})/../config.json"
-    _output=$(cat ${_cfg} | jq -e $1)
-    if [ $? -eq 1 ]; then
-        echo $2
-    else
-        echo $_output
-    fi
-}
-
 check_vars() {
     _arr=()
 
@@ -73,6 +62,8 @@ send_test_data() {
 }
 
 check_latency() {
+    # TODO: Utilize curl's time formatting options to get a better
+    #       check of the latency
     _start=$(date +%s%N)
     curl -k "https://$URI/test" -f &>/dev/null;
     _end=$(date +%s%N)
@@ -104,11 +95,14 @@ average_latency() {
     echo $(( _average / 10 ))
 }
 
+# This will wait for a process to close, optionally allowing for a signal to be sent
+# on a timeout
 wait_for() {
     _process=$1
     _timeout=$2
     _signal=$3
 
+    # Give a default value to $_signal
     if [[ -z "$_signal" ]]; then
         _signal=KILL
     fi
@@ -117,6 +111,7 @@ wait_for() {
 
     kill -s 0 $_process &>/dev/null
     while [ $? -eq 0 ]; do
+        # Checks if a timeout was set
         if [[ -n "$_timeout" ]]; then
             if [[ $_counter -ge $_timeout ]]; then
                 cprint "\ATimeout reached while waiting for PID $_process to end, sending SIG$_signal to process.\R"
