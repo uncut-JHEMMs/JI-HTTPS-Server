@@ -6,7 +6,7 @@ REPO_ROOT="$SCRIPT_DIR/.."
 source "$SCRIPT_DIR/utils/colors.sh"
 
 requirements() {
-    for cmd in grep cut sed lscpu free awk xargs jq valgrind curl gnuplot
+    for cmd in grep cut sed lscpu free awk xargs jq valgrind curl gnuplot ip getent
     do
         command -v $cmd &> /dev/null
 
@@ -205,6 +205,30 @@ resource_monitor() {
     gnuplot -e "set terminal x11; set title \"Memory Usage of $_program\"; set xlabel \"Time in Seconds\"; set ylabel \"Memory Usage in Bytes\"; set style fill solid 1.0; plot \"$_file\" smooth freq with fillsteps" -p
 }
 
+network_information() {
+    _uri=$(echo $URI | cut -d':' -f1)
+    _ip=$(getent hosts $_uri | awk '{ print $1 }' | head -n1)
+    _intf=$(ip route get $_ip | grep -Po '(?<=dev\s)\w+' | cut -d' ' -f1)
+    _type=$(cat /sys/class/net/$_intf/type)
+
+    case "$_type" in
+        1)
+            TYPE="Ethernet"
+            if [ -d /sys/class/net/$_intf/wireless ] || [ -L /sys/class/net/$IF/phy80211 ]; then
+                TYPE="Wireless"
+            fi
+            ;;
+        772)
+            TYPE="Local"
+            ;;
+        *)
+            TYPE="Unknown"
+            ;;
+    esac
+
+    echo "$TYPE"
+}
+
 # Make sure we have every command we need before we do any processing.
 requirements
 
@@ -255,6 +279,8 @@ fi
 OUT_DIR=$(readlink -f $OUT_DIR)
 
 printf "Processing...\r"
+
+NETINF=$(network_information)
 
 if [ $REMOTE -eq 0 ]; then
     CPU_UTILIZATION=$(cpu_utilization)
@@ -330,6 +356,7 @@ if [ $REMOTE -eq 0 ]; then
 
     cprint "\ACalculating average latency of the server...\R"
     _avlat=$(average_latency $1)
+    cprint "  \BNetwork Type\R: \H$NETINF\R"
     cprint "  \BAverage Latency\R: \H${_avlat}ms\R"
 
     _base="$OUT_DIR/$(basename $1)"
@@ -346,5 +373,6 @@ else
     cprint "\E--remote enabled, assuming server isn't on this system and ignoring hardware.\R"
     cprint "\ACalculating average latency of the server...\R"
     _avlat=$(average_latency)
+    cprint "  \BNetwork Type\R: \H$NETINF\R"
     cprint "  \BAverage Latency\R: \H${_avlat}ms\R"
 fi
