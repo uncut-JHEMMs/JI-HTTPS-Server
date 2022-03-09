@@ -7,8 +7,6 @@ on:
     - development
   pull_request:
     branches:
-    - main
-    - development
     - features/*
 
 jobs:
