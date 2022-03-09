@@ -45,9 +45,9 @@ RUN cmake --build . --config ${BUILD_TYPE} -j
 RUN mkdir /server
 RUN cp /docker_build/build/bin/${BUILD_TYPE}/ /server/bin -r
 WORKDIR /server
-RUN cp /docker_build/cert.pem /server/cert.pem
-RUN cp /docker_build/key.pem /server/key.pem
-RUN cp /docker_build/config.json /server/config.json
+RUN if [ -f /docker_build/cert.pem ]; then cp /docker_build/cert.pem /server/cert.pem; else cp /dep/libhttpserver/examples/cert.pem /server/cert.pem; fi
+RUN if [ -f /docker_build/key.pem ]; then cp /docker_build/key.pem /server/key.pem; else cp /dep/libhttpserver/examples/key.pem /server/key.pem; fi
+RUN if [ -f /docker_build/config.json ]; then cp /docker_build/config.json /server/config.json; else echo "{}" >> /server/config.json; fi
 ENV UTOPIA_CONFIG_FILE=/server/config.json
 
 CMD [ "/server/bin/HTTPS-Server", "-C", "/server/cert.pem", "-K", "/server/key.pem" ]
