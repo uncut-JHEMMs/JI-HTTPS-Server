@@ -2,16 +2,13 @@
 
 SCRIPT_DIR="$(dirname ${BASH_SOURCE[0]})"
 REPO_ROOT="$SCRIPT_DIR/.."
-OUT_DIR="$(pwd)/perf"
 
-if [ ! -d $OUT_DIR ]; then
-    mkdir -p $OUT_DIR
-fi
-
+# Provides the `cprint` and `print_opt` functions
 source "$SCRIPT_DIR/utils/colors.sh"
 
+# Checks that all the tools used in the script exist on the system
 requirements() {
-    for cmd in grep cut sed lscpu free awk xargs jq valgrind curl gnuplot
+    for cmd in grep cut sed lscpu free awk xargs jq valgrind curl gnuplot ip getent
     do
         command -v $cmd &> /dev/null
 
@@ -44,19 +41,6 @@ cpu_utilization() {
     echo $_query1 $_query2 | awk '{ print ($3-$1) * 100 / ($4-$2) }' | xargs printf "%.2f%%"
 }
 
-# Reads value at key $1 from config.json
-# and prints it, or print $2 if the key
-# doesn't exist
-config_value() {
-    _cfg="$(dirname ${BASH_SOURCE[0]})/../config.json"
-    _output=$(cat ${_cfg} | jq -e $1)
-    if [ $? -eq 1 ]; then
-        echo $2
-    else
-        echo $_output
-    fi
-}
-
 check_vars() {
     _arr=()
 
@@ -71,21 +55,54 @@ check_vars() {
 }
 
 send_test_data() {
-    curl -k 'https://localhost:8080/service/test' &>/dev/null; sleep 2
-    curl -k 'https://[::1]:8080/service/test' &>/dev/null; sleep 2
-    curl -k 'https://localhost:8080/test_digest'&>/dev/null; sleep 2
-    curl -k 'https://[::1]:8080/test_digest' &>/dev/null; sleep 2
-    curl -k --digest --user bad:password 'https://localhost:8080/test_digest' &>/dev/null; sleep 2
-    curl -k --digest --user admin:mypass 'https://localhost:8080/test_digest' &>/dev/null; sleep 2
-    curl -k --digest --user bad:password 'https://[::1]/test_digest' &>/dev/null; sleep 2
-    curl -k --digest --user admin:mypass 'https://[::1]/test_digest' &>/dev/null; sleep 2
+    curl -k "https://$URI/service/test" &>/dev/null; sleep 2
+    curl -k "https://$URI/test_digest" &>/dev/null; sleep 2
+    curl -k --digest --user bad:password "https://$URI/test_digest" &>/dev/null; sleep 2
+    curl -k --digest --user admin:mypass "https://$URI/test_digest" &>/dev/null; sleep 2
 }
 
+check_latency() {
+    # TODO: Utilize curl's time formatting options to get a better
+    #       check of the latency
+    _start=$(date +%s%N)
+    curl -k "https://$URI/test" -f &>/dev/null;
+    _end=$(date +%s%N)
+
+    # Time is in milliseconds
+    echo $(((_end-_start)/1000000))
+}
+
+average_latency() {
+    _program=$1
+
+    if [ -n "$_program" ]; then
+        $_program &>/dev/null &
+        CHILD_PID=$!
+    fi
+
+    _average=0
+    for i in {1..10}
+    do
+        _lat=$(check_latency)
+        ((_average+=$_lat))
+    done
+
+    if [ -n "$_program" ]; then
+        kill -INT $CHILD_PID
+        wait_for $CHILD_PID 5 INT
+    fi
+
+    echo $(( _average / 10 ))
+}
+
+# This will wait for a process to close, optionally allowing for a signal to be sent
+# on a timeout
 wait_for() {
     _process=$1
     _timeout=$2
     _signal=$3
 
+    # Give a default value to $_signal
     if [[ -z "$_signal" ]]; then
         _signal=KILL
     fi
@@ -94,6 +111,7 @@ wait_for() {
 
     kill -s 0 $_process &>/dev/null
     while [ $? -eq 0 ]; do
+        # Checks if a timeout was set
         if [[ -n "$_timeout" ]]; then
             if [[ $_counter -ge $_timeout ]]; then
                 cprint "\ATimeout reached while waiting for PID $_process to end, sending SIG$_signal to process.\R"
@@ -107,7 +125,7 @@ wait_for() {
         if [[ -n "$_timeout" ]]; then
             ((_counter+=1))
         fi
-        
+
         kill -s 0 $_process &>/dev/null
     done
 }
@@ -179,97 +197,177 @@ resource_monitor() {
     wait_for $MONITOR_PID
 
     cprint "\APlotting data from $_program...\R"
-    gnuplot -e "set terminal x11; set title \"Memory Usage of $_program\"; set xlabel \"Time in Seconds\"; set ylabel \"Memory Usage in Bytes\"; set style fill solid 1.0; plot \"$_file\" smooth freq with fillsteps" -p
+    gnuplot -e "set terminal png size 600,400; set output \"$OUT_DIR/$(basename $_program)_graph.png\"; set title \"Memory Usage of $_program\"; set xlabel \"Time in Seconds\"; set ylabel \"Memory Usage in Bytes\"; set style fill solid 1.0; plot \"$_file\" smooth freq with fillsteps" -p
+}
+
+network_information() {
+    _uri=$(echo $URI | cut -d':' -f1)
+    _ip=$(getent hosts $_uri | awk '{ print $1 }' | head -n1)
+    _intf=$(ip route get $_ip | grep -Po '(?<=dev\s)\w+' | cut -d' ' -f1)
+    _type=$(cat /sys/class/net/$_intf/type)
+
+    case "$_type" in
+        1)
+            TYPE="Ethernet"
+            if [ -d /sys/class/net/$_intf/wireless ] || [ -L /sys/class/net/$IF/phy80211 ]; then
+                TYPE="Wireless"
+            fi
+            ;;
+        772)
+            TYPE="Local"
+            ;;
+        *)
+            TYPE="Unknown"
+            ;;
+    esac
+
+    echo "$TYPE"
 }
 
 # Make sure we have every command we need before we do any processing.
 requirements
 
-if [ ! -x "$1" ]; then
-    cprint "\EThis script requires an executable to be passed in for profiling\R"
-    exit 1
+help() {
+    cprint "\FUsage: $0 \B[OPTIONS]\F...\R"
+    cprint "\BThis script will perform various performance monitoring steps\R"
+    cprint "\Bon the server in this repository.\R"
+    print_opt "h|help" "Displays this message and quits."
+    print_opt "r|remote" "Skips all hardware checks and only performs latency and other network checks."
+    print_opt "u|uri" "The base uri of the server such that \F'https://{uri}/'\R resolves to the server."
+    print_opt "o|out" "Directory to place all the performance monitoring results \F(default: ./perf)\R"
+    echo
+}
+
+export REMOTE=0
+export URI="localhost:8080"
+export OUT_DIR="$(pwd)/perf"
+
+while [ "$#" -gt 0 ]; do
+    case "$1" in
+        -h|--help) help; exit;;
+        -r|--remote) REMOTE=1; shift 1;;
+        -u|--uri) URI="$2"; shift 2;;
+        -o|--out) OUT_DIR="$2"; shift 2;;
+        -i|--in) PROGRAM="$2"; shift 2;;
+
+        -u=*|--uri=*) URI="${1#*=}"; shift 1;;
+        -o=*|--out=*) OUT_DIR="${1#*=}"; shift 1;;
+        -i=*|--in=*) PROGRAM="${1#*=}"; shift 1;;
+
+        -*) echo "Unknown option: $1" >&2; help; exit 1;;
+        *) echo "Ignoring extra argument: $1"; shift 1;;
+    esac
+done
+
+if [ $REMOTE -eq 0 ]; then
+    if [ -z "$PROGRAM" ]; then
+        cprint "\E--remote not enabled so the server executable must be passed in with --in!\R"
+    elif [ ! -x "$PROGRAM" ]; then
+        cprint "\EPassed in file must be an executable!\R"
+    fi
 fi
+
+if [ ! -d $OUT_DIR ]; then
+    mkdir -p $OUT_DIR
+fi
+
+OUT_DIR=$(readlink -f $OUT_DIR)
 
 printf "Processing...\r"
 
-CPU_UTILIZATION=$(cpu_utilization)
+NETINF=$(network_information)
 
-ARCHITECTURE=$(lscpu_value Architecture)
-NAME=$(lscpu_value "Model name")
-CORES=$(lscpu_value "Core(s) per socket")
-THREADS=$(lscpu_value "Thread(s) per core")
+if [ $REMOTE -eq 0 ]; then
+    CPU_UTILIZATION=$(cpu_utilization)
 
-cprint "\BSystem Information\R:"
-cprint "  \BArchitecture\R:    \H$ARCHITECTURE\R"
-cprint "  \BCPU\R:             \H$NAME\R"
-cprint "  \BCores\R:           \H$CORES\R"
-cprint "  \BThreads\R:         \H$THREADS\R"
+    ARCHITECTURE=$(lscpu_value Architecture)
+    NAME=$(lscpu_value "Model name")
+    CORES=$(lscpu_value "Core(s) per socket")
+    THREADS=$(lscpu_value "Thread(s) per core")
 
-TOTAL_MEM=$(free_value Mem 1)
-USED_MEM=$(free_value Mem 2)
-FREE_MEM=$(free_value Mem 3)
-CACHED_MEM=$(free_value Mem 5)
+    cprint "\BSystem Information\R:"
+    cprint "  \BArchitecture\R:    \H$ARCHITECTURE\R"
+    cprint "  \BCPU\R:             \H$NAME\R"
+    cprint "  \BCores\R:           \H$CORES\R"
+    cprint "  \BThreads\R:         \H$THREADS\R"
 
-TOTAL_SWAP=$(free_value Swap 1)
-USED_SWAP=$(free_value Swap 2)
-FREE_SWAP=$(free_value Swap 3)
+    TOTAL_MEM=$(free_value Mem 1)
+    USED_MEM=$(free_value Mem 2)
+    FREE_MEM=$(free_value Mem 3)
+    CACHED_MEM=$(free_value Mem 5)
 
-cprint "\BResources\R:"
-cprint "  \BMemory\R:          \H$USED_MEM/$TOTAL_MEM used\R \F($CACHED_MEM cached)\R - \H$FREE_MEM free\R"
-cprint "  \BSwap\R:            \H$USED_SWAP/$TOTAL_SWAP used\R - \H$FREE_SWAP free\R"
-cprint "  \BCPU Utilization\R: \H$CPU_UTILIZATION\R"
-echo "-------------------"
-echo
+    TOTAL_SWAP=$(free_value Swap 1)
+    USED_SWAP=$(free_value Swap 2)
+    FREE_SWAP=$(free_value Swap 3)
 
-if [ -f "$UTOPIA_CONFIG_FILE" ]; # Check for config in environ
-then
-    _cfg="$UTOPIA_CONFIG_FILE"
-elif [ -f "config.json" ] # Check for config in current directory
-then
-    _cfg="config.json"
-elif [ -f "$REPO_ROOT/config.json" ] # Then repository root
-then
-    _cfg="$(dirname ${BASH_SOURCE[0]})/../config.json"
-fi
-
-if [ -f "$_cfg" ]; then
-    cprint "\BCurrent JSON configuration file:\R"
-    cat $_cfg | jq .
+    cprint "\BResources\R:"
+    cprint "  \BMemory\R:          \H$USED_MEM/$TOTAL_MEM used\R \F($CACHED_MEM cached)\R - \H$FREE_MEM free\R"
+    cprint "  \BSwap\R:            \H$USED_SWAP/$TOTAL_SWAP used\R - \H$FREE_SWAP free\R"
+    cprint "  \BCPU Utilization\R: \H$CPU_UTILIZATION\R"
+    echo "-------------------"
     echo
+
+    if [ -f "$UTOPIA_CONFIG_FILE" ]; # Check for config in environ
+    then
+        _cfg="$UTOPIA_CONFIG_FILE"
+    elif [ -f "config.json" ] # Check for config in current directory
+    then
+        _cfg="config.json"
+    elif [ -f "$REPO_ROOT/config.json" ] # Then repository root
+    then
+        _cfg="$(dirname ${BASH_SOURCE[0]})/../config.json"
+    fi
+
+    if [ -f "$_cfg" ]; then
+        cprint "\BCurrent JSON configuration file:\R"
+        cat $_cfg | jq .
+        echo
+    else
+        cprint "\ENo JSON configuration file was found, so none will be used!\R"
+    fi
+
+    ENVIRONS=(
+        UTOPIA_CONFIG_FILE
+        UTOPIA_PORT
+        UTOPIA_MAX_CONNECTIONS
+        UTOPIA_TIMEOUT
+        UTOPIA_THREADS
+        UTOPIA_THREAD_PER_CONNECTION
+        UTOPIA_USE_IPV4
+        UTOPIA_USE_IPV6
+        UTOPIA_CERTIFICATE
+        UTOPIA_PRIVATE_KEY
+    )
+    VALID=($(check_vars ${ENVIRONS[@]}))
+
+    if [ ${#VALID[@]} -ne 0 ]; then
+        for environ in "${VALID[@]}"; do
+            cprint $environ
+        done
+    else
+        cprint "\ENo environment variables have been set for the server!\R"
+    fi
+    echo
+
+    cprint "\ACalculating average latency of the server...\R"
+    _avlat=$(average_latency $PROGRAM)
+    cprint "  \BNetwork Type\R: \H$NETINF\R"
+    cprint "  \BAverage Latency\R: \H${_avlat}ms\R"
+
+    _base="$OUT_DIR/$(basename $PROGRAM)"
+    valgrind_run cachegrind $PROGRAM --branch-sim=yes --cachegrind-out-file="$_base.cachegrind"
+    valgrind_run callgrind $PROGRAM  --callgrind-out-file="$_base.callgrind"
+    valgrind_run massif $PROGRAM --massif-out-file="$_base.massif"
+    valgrind_run memcheck $PROGRAM --xtree-memory=full --xtree-memory-file="$_base.xtree"
+
+    cprint "\AAnnotating callgraph from valgrind into\R '\B$_base.callgrind.annotated\R'\A...\R"
+    callgrind_annotate --auto=yes --inclusive=yes --sort=curB:100,curBk:100 "$_base.xtree" > "$_base.callgrind.annotated"
+
+    resource_monitor $PROGRAM
 else
-    cprint "\ENo JSON configuration file was found, so none will be used!\R"
+    cprint "\E--remote enabled, assuming server isn't on this system and ignoring hardware.\R"
+    cprint "\ACalculating average latency of the server...\R"
+    _avlat=$(average_latency)
+    cprint "  \BNetwork Type\R: \H$NETINF\R"
+    cprint "  \BAverage Latency\R: \H${_avlat}ms\R"
 fi
-
-ENVIRONS=(
-    UTOPIA_CONFIG_FILE
-    UTOPIA_PORT
-    UTOPIA_MAX_CONNECTIONS
-    UTOPIA_TIMEOUT
-    UTOPIA_THREADS
-    UTOPIA_THREAD_PER_CONNECTION
-    UTOPIA_USE_IPV4
-    UTOPIA_USE_IPV6
-    UTOPIA_CERTIFICATE
-    UTOPIA_PRIVATE_KEY
-)
-VALID=($(check_vars ${ENVIRONS[@]}))
-
-if [ ${#VALID[@]} -ne 0 ]; then
-    for environ in "${VALID[@]}"; do
-        cprint $environ
-    done
-else
-    cprint "\ENo environment variables have been set for the server!\R"
-fi
-echo
-
-_base="$OUT_DIR/$(basename $1)"
-valgrind_run cachegrind $1 --branch-sim=yes --cachegrind-out-file="$_base.cachegrind"
-valgrind_run callgrind $1  --callgrind-out-file="$_base.callgrind"
-valgrind_run massif $1 --massif-out-file="$_base.massif"
-valgrind_run memcheck $1 --xtree-memory=full --xtree-memory-file="$_base.xtree"
-
-cprint "\AAnnotating callgraph from valgrind into\R '\B$_base.callgrind.annotated\R'\A...\R"
-callgrind_annotate --auto=yes --inclusive=yes --sort=curB:100,curBk:100 "$_base.xtree" > "$_base.callgrind.annotated"
-
-resource_monitor $1

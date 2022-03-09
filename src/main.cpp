@@ -1,3 +1,4 @@
+#include <spdlog/common.h>
 #define HAVE_GNUTLS
 #include <httpserver.hpp>
 #include <string>
@@ -14,6 +15,7 @@
 
 #include <spdlog/spdlog.h>
 #include <spdlog/sinks/stdout_color_sinks.h>
+#include <spdlog/sinks/basic_file_sink.h>
 
 #include "server_opts.hpp"
 
@@ -34,14 +36,19 @@ public:
     {
         if (req.get_digested_user().empty())
         {
+            spdlog::warn("GET %s - FAIL: No user!", req.get_path());
             return Ref<digest_auth_fail_response>(new digest_auth_fail_response("FAIL: No user!", "test@localhost", MY_OPAQUE, true));
         }
         else
         {
             bool reload_nonce = false;
             if (!req.check_digest_auth("test@localhost", "mypass", 300, &reload_nonce))
+            {
+                spdlog::warn("GET %s - FAIL: Invalid password!", req.get_path());
                 return Ref<digest_auth_fail_response>(new digest_auth_fail_response("FAIL: Invalid password!", "test@localhost", MY_OPAQUE, reload_nonce));
+            }
         }
+        spdlog::info("GET %s - SUCCESS", req.get_path());
         return Ref<http_response>(new string_response("SUCCESS", 200, "text/plain"));
     }
 };
@@ -59,6 +66,27 @@ public:
             ss << key << ": " << value << "\n";
         }
         return Ref<http_response>(new string_response(ss.str(), 200, "text/plain"));
+    }
+};
+
+class simple_resource : public http_resource
+{
+public:
+    const Ref<http_response> render_GET(const http_request&)
+    {
+        return Ref<http_response>(new string_response("", 200, "text/plain"));
+    }
+};
+
+class big_workload_resource : public http_resource
+{
+    const Ref<http_response> render_GET(const http_request&)
+    {
+        using namespace std::literals::chrono_literals;
+
+        std::this_thread::sleep_for(5000ms);
+
+        return Ref<http_response>(new string_response("", 200, "text/plain"));
     }
 };
 
@@ -97,6 +125,20 @@ void signal_callback_handler(int signum)
         should_run = false;
 }
 
+void initialize_logging()
+{
+    // Setting format of Spdlog
+    spdlog::set_pattern("[%D %r] [thread %t] [%^%n - %l%$] %v");
+
+    auto console_sink = std::make_shared<spdlog::sinks::stdout_color_sink_mt>();
+    console_sink->set_level(spdlog::level::trace);
+
+    auto file_sink = std::make_shared<spdlog::sinks::basic_file_sink_mt>("server.log");
+    file_sink->set_level(spdlog::level::trace);
+
+    spdlog::set_default_logger(std::make_shared<spdlog::logger>("Utopia", spdlog::sinks_init_list({console_sink, file_sink})));
+}
+
 int main(int argc, const char** argv)
 {
     auto opts = parse_options(argc, argv);
@@ -111,11 +153,11 @@ int main(int argc, const char** argv)
         .connection_timeout(opts.timeout)
         .log_access([](const auto& url) {
                 accesses++;
-                spdlog::get("console")->info("ACCESSING: {}", url);
+                spdlog::info("ACCESSING: {}", url);
         })
         .log_error([](const auto& err) {
                 errors++;
-                spdlog::get("stderr")->error("ERROR: {}", err);
+                spdlog::error("ERROR: {}", err);
         });
 
     if (opts.thread_per_connection)
@@ -140,17 +182,18 @@ int main(int argc, const char** argv)
     // the prettiest way, but it works.
     signal(SIGINT, signal_callback_handler);
 
-    // Creating some global logs
-    spdlog::stdout_color_mt("console");
-    spdlog::stderr_color_mt("stderr");
+    // Setup logging for the server
+    initialize_logging();
 
     webserver ws = builder;
     digest_test_resource hwr;
     test_resource tr;
+    simple_resource sr;
     ws.register_resource("/test_digest", &hwr);
     ws.register_resource("/service", &tr, true);
+    ws.register_resource("/test", &sr, false);
 
-    spdlog::get("console")->info("Starting server on port {}...", opts.port);
+    spdlog::info("Starting server on port {}...", opts.port);
     ws.start(false);
 
     std::condition_variable cv;
@@ -161,7 +204,7 @@ int main(int argc, const char** argv)
         std::this_thread::sleep_for(std::chrono::seconds(1));
     }
 
-    spdlog::get("console")->info("Graceful shutdown requested, shutting down...");
+    spdlog::info("Graceful shutdown requested, shutting down...");
 
     if (ws.is_running() && !should_run)
         ws.sweet_kill();
@@ -169,7 +212,7 @@ int main(int argc, const char** argv)
     cv.notify_one();
     perfthread.join();
 
-    spdlog::get("console")->debug("All threads done and webserver gracefully killed.");
+    spdlog::debug("All threads done and webserver gracefully killed.");
 
     return 0;
 }

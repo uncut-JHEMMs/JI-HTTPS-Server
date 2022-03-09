@@ -11,7 +11,8 @@ HIGHLIGHT="H|\033[1;34m"
 ERROR="E|\033[1;31m"
 FADE="F|\033[37m"
 ALERT="A|\033[1;32m"
-COL_CMDS=($RESET $BOLD $HIGHLIGHT $ERROR $FADE $ALERT)
+EMPTY="-|"
+COL_CMDS=($RESET $BOLD $HIGHLIGHT $ERROR $FADE $ALERT $EMPTY)
 
 # Here I'm calculating the awk command, so that you can add
 # more colors to COL_CMDS and it'll automatically be added
@@ -25,5 +26,40 @@ done
 COOKED_AWK+="}1"
 
 cprint() {
-    echo "$1" | awk "$COOKED_AWK"
+    if [ $# -gt 0 ]; then
+        echo -e "$(echo "$@" | awk "$COOKED_AWK")"
+    else
+        cat /dev/stdin | awk "$COOKED_AWK"
+    fi
+}
+
+repeat() {
+    _start=1
+    _end=${1:-80}
+    _str=${2:- }
+    for (( i=$_start; i<=$_end; i++ )); do echo -n "${_str}"; done
+}
+
+print_opt() {
+    _short=$(echo $1 | cut -d'|' -f1)
+    _long=$(echo $1 | cut -d'|' -f2)
+    _desc=$2
+
+    _str="  \B-$_short\R, \B--$_long\R"
+    _str+="$(repeat $(expr 27 - ${#_str}) ' ')"
+
+    _newlen=$(expr ${#_desc} + ${#_str})
+    if [[ $_newlen -gt 72 ]]; then
+        for (( i=72; i<=$_newlen; i++ )); do
+            idx=$(expr $i - ${#_str} - 1)
+            if [ "${_desc:$idx:1}" == ' ' ]; then
+                _str+="\H${_desc:0:$idx}\R\n$(repeat 20 ' ')\H${_desc:$idx}\R"
+                break
+            fi
+        done
+    else
+        _str+="\H${_desc}\R"
+    fi
+
+    cprint "$_str"
 }

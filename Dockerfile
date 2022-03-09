@@ -15,7 +15,8 @@ RUN dnf install -y \
     jq \
     valgrind \
     gnuplot \
-    vim
+    vim \
+    iproute
 
 ENV CC=clang
 ENV CXX=clang++
