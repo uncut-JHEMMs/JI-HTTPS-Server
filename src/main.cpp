@@ -2,6 +2,7 @@
 #include <httpserver.hpp>
 #include <string>
 #include <iostream>
+#include <sstream>
 #include <fstream>
 #include <thread>
 #include <chrono>
@@ -33,15 +34,31 @@ public:
     {
         if (req.get_digested_user().empty())
         {
-            return Ref<digest_auth_fail_response>(new digest_auth_fail_response("FAIL", "test@localhost", MY_OPAQUE, true));
+            return Ref<digest_auth_fail_response>(new digest_auth_fail_response("FAIL: No user!", "test@localhost", MY_OPAQUE, true));
         }
         else
         {
             bool reload_nonce = false;
             if (!req.check_digest_auth("test@localhost", "mypass", 300, &reload_nonce))
-                return Ref<digest_auth_fail_response>(new digest_auth_fail_response("FAIL", "test@localhost", MY_OPAQUE, reload_nonce));
+                return Ref<digest_auth_fail_response>(new digest_auth_fail_response("FAIL: Invalid password!", "test@localhost", MY_OPAQUE, reload_nonce));
         }
         return Ref<http_response>(new string_response("SUCCESS", 200, "text/plain"));
+    }
+};
+
+class test_resource : public http_resource
+{
+public:
+    const Ref<http_response> render(const http_request& req)
+    {
+        std::stringstream ss;
+        ss << "Successful " << req.get_method() << " to " << req.get_path() << "!\n";
+        ss << "Args:\n";
+        for(const auto& [key, value] : req.get_args())
+        {
+            ss << key << ": " << value << "\n";
+        }
+        return Ref<http_response>(new string_response(ss.str(), 200, "text/plain"));
     }
 };
 
@@ -129,7 +146,11 @@ int main(int argc, const char** argv)
 
     webserver ws = builder;
     digest_test_resource hwr;
+    test_resource tr;
     ws.register_resource("/test_digest", &hwr);
+    ws.register_resource("/service", &tr, true);
+
+    spdlog::get("console")->info("Starting server on port {}...", opts.port);
     ws.start(false);
 
     std::condition_variable cv;
@@ -140,11 +161,15 @@ int main(int argc, const char** argv)
         std::this_thread::sleep_for(std::chrono::seconds(1));
     }
 
+    spdlog::get("console")->info("Graceful shutdown requested, shutting down...");
+
     if (ws.is_running() && !should_run)
         ws.sweet_kill();
 
     cv.notify_one();
     perfthread.join();
+
+    spdlog::get("console")->debug("All threads done and webserver gracefully killed.");
 
     return 0;
 }

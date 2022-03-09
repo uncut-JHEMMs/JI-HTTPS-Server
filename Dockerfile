@@ -10,7 +10,12 @@ RUN dnf install -y \
     ninja-build \
     libmicrohttpd-devel \
     gnutls-devel \
-    spdlog-devel
+    spdlog-devel \
+    procps-ng \
+    jq \
+    valgrind \
+    gnuplot \
+    vim
 
 ENV CC=clang
 ENV CXX=clang++
@@ -34,13 +39,14 @@ RUN cmake --install . --config ${BUILD_TYPE} --prefix /usr
 
 COPY . /docker_build
 WORKDIR /docker_build/build
-RUN cmake -G Ninja -DCMAKE_BUILD_TYPE=${BUILD_TYPE} -DCMAKE_MODULE_PATH=/usr/lib64/cmake/nlohmann_json:/usr/lib64/ ..
+RUN cmake -G Ninja -DCMAKE_EXPORT_COMPILE_COMMANDS=ON -DCMAKE_BUILD_TYPE=${BUILD_TYPE} -DCMAKE_MODULE_PATH=/usr/lib64/cmake/nlohmann_json:/usr/lib64/ ..
 RUN cmake --build . --config ${BUILD_TYPE} -j
 RUN mkdir /server
 RUN cp /docker_build/build/bin/${BUILD_TYPE}/ /server/bin -r
 WORKDIR /server
-RUN curl -LO https://github.com/etr/libhttpserver/raw/master/examples/cert.pem
-RUN curl -LO https://github.com/etr/libhttpserver/raw/master/examples/key.pem
-
+RUN cp /docker_build/cert.pem /server/cert.pem
+RUN cp /docker_build/key.pem /server/key.pem
+RUN cp /docker_build/config.json /server/config.json
+ENV UTOPIA_CONFIG_FILE=/server/config.json
 
 CMD [ "/server/bin/HTTPS-Server", "-C", "/server/cert.pem", "-K", "/server/key.pem" ]
