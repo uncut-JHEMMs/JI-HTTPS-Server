@@ -1,0 +1,8 @@
+.git/
+
+/build
+
+Dockerfile
+docker-compose.yml
+compile_commands.json
+README.md
