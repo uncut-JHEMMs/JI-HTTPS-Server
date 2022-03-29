@@ -24,12 +24,6 @@ set(PROJECT_SOURCES
 
 add_library(${PROJECT_NAME} ${PROJECT_SOURCES})
 
-set_target_properties(
-    ${PROJECT_NAME}
-      PROPERTIES
-    RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin/${CMAKE_BUILD_TYPE}"
-)
-
 target_compile_features(${PROJECT_NAME} PUBLIC cxx_std_17)
 
 if (MSVC)
@@ -108,3 +102,9 @@ target_compile_options(${PROJECT_NAME} PUBLIC ${LIBHTTPSERVER_CFLAGS_OTHER})
 
 add_executable(${PROJECT_NAME}-server src/main.cpp)
 target_link_libraries(${PROJECT_NAME}-server PUBLIC ${PROJECT_NAME})
+
+set_target_properties(
+        ${PROJECT_NAME}-server
+        PROPERTIES
+        RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin/${CMAKE_BUILD_TYPE}"
+)
