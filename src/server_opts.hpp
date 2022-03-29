@@ -1,6 +1,7 @@
 #pragma once
 
 #include <string>
+#include <optional>
 
 /**
  * A structure containing all of the configurable options of the server.
@@ -25,8 +26,8 @@ struct ServerOptions
     bool thread_per_connection = false;
     bool use_ipv6 = false;
     bool use_ipv4 = true;
-    std::string certificate;
-    std::string private_key;
+    std::optional<std::string> certificate;
+    std::optional<std::string> private_key;
 };
 
 /**

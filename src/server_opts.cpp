@@ -74,8 +74,14 @@ ServerOptions parse_options(int argc, const char** argv)
     options.thread_per_connection = env::get_bool("UTOPIA_THREAD_PER_CONNECTION", options.thread_per_connection);
     options.use_ipv4 = env::get_bool("UTOPIA_USE_IPV4", options.use_ipv4);
     options.use_ipv6 = env::get_bool("UTOPIA_USE_IPV6", options.use_ipv6);
-    options.certificate = env::get_string("UTOPIA_CERTIFICATE", options.certificate);
-    options.private_key = env::get_string("UTOPIA_PRIVATE_KEY", options.private_key);
+    options.certificate =
+            options.certificate.has_value() ?
+            env::get_string("UTOPIA_CERTIFICATE", options.certificate.value()) :
+            env::get_string("UTOPIA_CERTIFICATE");
+    options.private_key =
+            options.private_key.has_value() ?
+            env::get_string("UTOPIA_PRIVATE_KEY", options.private_key.value()) :
+            env::get_string("UTOPIA_PRIVATE_KEY");
 
     popl::OptionParser op("OPTIONS");
     auto help_opt = op.add<popl::Switch>("h", "help", "show this message");
@@ -143,9 +149,6 @@ ServerOptions parse_options(int argc, const char** argv)
     //               So I suppose it's fine?
     if (!options.use_ipv4 && !options.use_ipv6)
         throw std::invalid_argument("both ipv4 and ipv6 are disallowed, so no connections can be made!");
-
-    if (options.certificate.empty() || options.private_key.empty())
-        throw std::invalid_argument("A certificate and private key must be given for authentication!");
 
     return options;
 }

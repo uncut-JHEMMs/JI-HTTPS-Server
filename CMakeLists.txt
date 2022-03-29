@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.15)
 
-project(HTTPS-Server VERSION 0.1.0 LANGUAGES CXX)
+project(utopia VERSION 0.1.0 LANGUAGES CXX)
 message(STATUS "Started CMake for ${PROJECT_NAME} v${PROJECT_VERSION}...\n")
 
 # Use ccache to speed up rebuilds if it's available.
@@ -16,12 +16,13 @@ if (PROJECT_SOURCE_DIR STREQUAL PROJECT_BINARY_DIR)
 endif()
 
 set(PROJECT_SOURCES
-    src/main.cpp
+    src/utopia.cpp
     src/env.cpp
     src/server_opts.cpp
-)
+    src/perf_monitor.cpp
+    src/resources.cpp)
 
-add_executable(${PROJECT_NAME} ${PROJECT_SOURCES})
+add_library(${PROJECT_NAME} ${PROJECT_SOURCES})
 
 set_target_properties(
     ${PROJECT_NAME}
@@ -102,5 +103,8 @@ find_package(PkgConfig REQUIRED)
 pkg_check_modules(LIBHTTPSERVER REQUIRED libhttpserver)
 
 target_link_libraries(${PROJECT_NAME} ${LIBHTTPSERVER_LIBRARIES} spdlog::spdlog nlohmann_json::nlohmann_json Threads::Threads)
-target_include_directories(${PROJECT_NAME} PUBLIC ${LIBHTTPSERVER_INCLUDE_DIRS} PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
+target_include_directories(${PROJECT_NAME} PUBLIC ${LIBHTTPSERVER_INCLUDE_DIRS} ${CMAKE_CURRENT_SOURCE_DIR}/src)
 target_compile_options(${PROJECT_NAME} PUBLIC ${LIBHTTPSERVER_CFLAGS_OTHER})
+
+add_executable(${PROJECT_NAME}-server src/main.cpp)
+target_link_libraries(${PROJECT_NAME}-server PUBLIC ${PROJECT_NAME})
