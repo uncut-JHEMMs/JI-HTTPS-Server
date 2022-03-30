@@ -42,3 +42,9 @@
 
 # Build directory
 build/
+
+# IDE directories and files
+.idea
+.vscode
+
+cmake-build*
