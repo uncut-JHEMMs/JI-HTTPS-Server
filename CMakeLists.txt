@@ -108,3 +108,5 @@ set_target_properties(
         PROPERTIES
         RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin/${CMAKE_BUILD_TYPE}"
 )
+
+add_subdirectory(datagen)
