@@ -43,10 +43,7 @@ namespace resources
 
         inline void push_access(const AccessData& accessData)
         {
-            data->queue_mtx.lock();
             data->access_queue.push(accessData);
-            data->queue_mtx.unlock();
-            data->queue_cv.notify_all();
         }
 
         METHOD_SIG(render_GET);

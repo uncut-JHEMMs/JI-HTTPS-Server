@@ -104,7 +104,10 @@ int utopia::run(int argc, const char** argv)
         ws.sweet_kill();
 
     perf_data->should_close = true;
-    perf_data->queue_cv.notify_all();
+
+    // Interrupt any threads that are waiting for a value from the queue
+    perf_data->access_queue.interrupt();
+
     perf_thread.join();
 
     spdlog::debug("All threads done and webserver gracefully killed.");

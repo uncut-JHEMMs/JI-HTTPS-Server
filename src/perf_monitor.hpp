@@ -8,6 +8,8 @@
 #include <tuple>
 #include <thread>
 
+#include "thread_safe_queue.hpp"
+
 enum AccessStatus
 {
     NoUserProvided,
@@ -25,13 +27,8 @@ struct AccessData
 struct PerfData
 {
     std::atomic_bool should_close;
-    std::mutex queue_mtx;
-    std::condition_variable queue_cv;
-    std::queue<AccessData> access_queue;
+    ThreadSafeQueue<AccessData> access_queue;
 };
-
-struct shutdown_exception : public std::exception
-{};
 
 namespace perf_monitor
 {

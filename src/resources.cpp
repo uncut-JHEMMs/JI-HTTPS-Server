@@ -63,12 +63,12 @@ namespace resources
         return std::make_shared<string_response>(ss.str(), 200, "text/plain");
     }
 
-    const Ref<http_response> empty_test::render_GET(const http_request& req)
+    const Ref<http_response> empty_test::render_GET(const http_request&)
     {
         return std::make_shared<httpserver::string_response>("", 200, "text/plain");
     }
 
-    const Ref<http_response> big_workload::render_GET(const http_request& req)
+    const Ref<http_response> big_workload::render_GET(const http_request&)
     {
         using namespace std::literals::chrono_literals;
         using httpserver::string_response;
