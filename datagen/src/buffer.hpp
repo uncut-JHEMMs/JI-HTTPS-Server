@@ -4,6 +4,7 @@
 #include <cstdint>
 #include <string>
 #include <iostream>
+#include <cstring>
 
 #include <lmdb.h>
 
@@ -31,10 +32,7 @@ public:
     {
         if constexpr(std::is_integral_v<T> || std::is_floating_point_v<T>)
         {
-            m_data.insert(m_data.end(), sizeof(T), 0);
-            auto* ptr = m_data.data() + m_offset;
-            *(T*)ptr = value;
-            m_offset += sizeof(T);
+            write(&value, sizeof(T));
         }
         else if constexpr(is_vector_v<T>)
         {
@@ -45,13 +43,19 @@ public:
         else if constexpr(std::is_same_v<T, std::string>)
         {
             write((uint8_t)value.size());
-            for (const auto& c : value)
-                write(c);
+            write(value.data(), value.size());
         }
         else
         {
             throw std::runtime_error("Type not serializable!");
         }
+    }
+
+    void write(const void* data, size_t size)
+    {
+        m_data.insert(m_data.end(), size, 0);
+        memcpy(m_data.data() + m_offset, data, size);
+        m_offset += size;
     }
 
     inline operator MDB_val() const

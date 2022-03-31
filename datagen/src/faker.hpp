@@ -1,6 +1,7 @@
 #pragma once
 
 #include <string>
+#include <string_view>
 
 /**
  * This is a simple macro to reduce repeated code, it makes an inline static method with the name
