@@ -42,6 +42,11 @@ WORKDIR build
 RUN cmake -G Ninja -DJSON_BuildTests=OFF -DCMAKE_BUILD_TYPE=${BUILD_TYPE} ..
 RUN cmake --install . --config ${BUILD_TYPE} --prefix /usr
 
+WORKDIR /dep/catch2
+RUN git clone --depth 1 --branch v3.0.0-preview4 https://github.com/catchorg/Catch2.git .
+RUN cmake -Bbuild -H. -DBUILD_TESTING=OFF -DCMAKE_INSTALL_PREFIX=/usr
+RUN cmake --build build/ --target install -j
+
 COPY . /docker_build
 WORKDIR /docker_build/build
 RUN cmake -G Ninja -DCMAKE_EXPORT_COMPILE_COMMANDS=ON -DCMAKE_BUILD_TYPE=${BUILD_TYPE} -DCMAKE_MODULE_PATH=/usr/lib64/cmake/nlohmann_json:/usr/lib64/ ..
