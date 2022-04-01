@@ -11,11 +11,13 @@
 #define EXPOSE_METHOD(method, py) inline static std::string method() { return Faker::CallMethod(#py); }
 
 /**
- * Forward declaration of PyObject, just so code that uses Faker don't have to include the
- * massive Python.h header file when they aren't actually going to use it.
+ * Forward declaration of some Python structs, just so code that uses Faker don't have to
+ * include the massive Python.h header file when they aren't actually going to use it.
  */
 struct _object;
+struct _ts;
 typedef struct _object PyObject;
+typedef struct _ts PyThreadState;
 
 /**
  * This is essentially a map of the Faker python library.
@@ -31,7 +33,10 @@ namespace faker
      */
     class Faker
     {
+        static Faker Instance;
+
         PyObject* module;
+        PyThreadState* ts;
 
         /**
          * Making this private, but not deleted, so I can statically initialize this

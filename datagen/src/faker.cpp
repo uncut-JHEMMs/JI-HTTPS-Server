@@ -7,6 +7,8 @@
 
 namespace faker
 {
+    Faker Faker::Instance = Faker();
+
     Faker::Faker()
     {
         Py_Initialize();
@@ -44,16 +46,19 @@ namespace faker
             Py_DECREF(module_class);
             exit(1);
         }
+
+        this->ts = PyEval_SaveThread();
     }
 
     Faker::~Faker() noexcept
     {
+        PyEval_RestoreThread(this->ts);
         Py_Finalize();
     }
 
     std::string Faker::CallMethod(const std::string_view& view)
     {
-        static Faker Instance = Faker();
+        auto state = PyGILState_Ensure();
         auto* value = PyObject_CallMethod(Instance.module, view.data(), nullptr); // Faker().{view}()
         if (!value)
         {
@@ -63,6 +68,7 @@ namespace faker
 
         const char* str = PyUnicode_AsUTF8(value);
         Py_DECREF(value);
+        PyGILState_Release(state);
         return std::string{str};
     }
 }
