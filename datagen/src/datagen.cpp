@@ -25,8 +25,10 @@ void datagen::process(const fs::path& data_path, const fs::path& db_dir)
 
     auto transaction = lmdb::txn::begin(env);
     MDB_dbi users_dbi = lmdb::dbi::open(transaction, "users", MDB_CREATE);
+    MDB_dbi cards_dbi = lmdb::dbi::open(transaction, "cards", MDB_CREATE);
 
     std::set<std::string> users;
+    std::set<std::pair<std::string, std::string>> cards;
     std::ifstream file{data_path};
 
     auto start = std::chrono::system_clock::now();
@@ -58,23 +60,44 @@ void datagen::process(const fs::path& data_path, const fs::path& db_dir)
                 return elem;
             };
 
-            auto id = next();
+            auto user_id = next();
+            auto card_id = next();
 
             /**
              * TODO(Jordan):
-             *   I might be able to get some optimization here if I convert the user id to an
+             *   I might be able to get some optimization here if I convert the user user_id to an
              *   unsigned integer, and store that. I need to test that later.
              */
-            if (!users.count(id))
+            if (!users.count(user_id))
             {
-                users.emplace(id);
+                users.emplace(user_id);
 
                 auto user = generation::generate_user();
                 auto serialized = user.serialize();
-                MDB_val key{ id.size(), id.data() };
+                MDB_val key{ user_id.size(), user_id.data() };
                 MDB_val val = serialized;
 
                 mdb_put(transaction, users_dbi, &key, &val, 0);
+            }
+
+            /**
+             * TODO(Jordan):
+             *  Ditto as Users
+             */
+            if (!cards.count(std::make_pair(user_id, card_id)))
+            {
+                cards.emplace(user_id, card_id);
+
+                std::string key_str = user_id;
+                key_str += ".";
+                key_str += card_id;
+
+                auto card = generation::generate_card();
+                auto serialized = card.serialize();
+                MDB_val key{key_str.size(), key_str.data() };
+                MDB_val val = serialized;
+
+                mdb_put(transaction, cards_dbi, &key, &val, 0);
             }
         }
     }

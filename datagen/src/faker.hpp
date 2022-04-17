@@ -2,6 +2,7 @@
 
 #include <string>
 #include <string_view>
+#include "model.hpp"
 
 /**
  * This is a simple macro to reduce repeated code, it makes an inline static method with the name
@@ -9,6 +10,7 @@
  * return whatever was returned during the method call.
  */
 #define EXPOSE_METHOD(method, py) inline static std::string method() { return Faker::CallMethod(#py); }
+#define EXPOSE_CARD_METHOD(method, py) inline static std::string method(Card::CardType type = Card::None) { return Faker::CallCardMethod(#py, type); }
 
 /**
  * Forward declaration of some Python structs, just so code that uses Faker don't have to
@@ -53,8 +55,16 @@ namespace faker
          * @return The result of the method, as a string
          */
         static std::string CallMethod(const std::string_view& view);
+        static std::string CallCardMethod(const std::string_view& view, Card::CardType type);
     };
 
     EXPOSE_METHOD(FirstName, first_name)
     EXPOSE_METHOD(LastName, last_name)
+
+    namespace credit_card
+    {
+        EXPOSE_METHOD(ExpirationDate, credit_card_expire)
+        EXPOSE_CARD_METHOD(CardNumber, credit_card_number)
+        EXPOSE_CARD_METHOD(SecurityCode, credit_card_security_code)
+    }
 }

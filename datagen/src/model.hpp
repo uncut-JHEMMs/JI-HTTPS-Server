@@ -29,3 +29,41 @@ struct User
         return buffer;
     }
 };
+
+struct Card
+{
+    enum CardType : uint8_t
+    {
+        None = 0xFF,
+        Amex = 0,
+        Discover = 1,
+        JCB = 2,
+        Mastercard = 3,
+        Visa = 4
+    };
+
+    CardType type;
+    uint8_t expiration_month;
+    uint8_t expiration_year;
+    uint cvv;
+    std::string pan;
+
+    inline Buffer serialize()
+    {
+        auto sizeInBytes
+                = sizeof(uint8_t)
+                + sizeof(expiration_month)
+                + sizeof(expiration_year)
+                + sizeof(cvv)
+                + (sizeof(char) * pan.size());
+
+        Buffer buffer{sizeInBytes};
+        buffer.write((uint8_t)type);
+        buffer.write(expiration_month);
+        buffer.write(expiration_year);
+        buffer.write(cvv);
+        buffer.write(pan);
+
+        return buffer;
+    }
+};

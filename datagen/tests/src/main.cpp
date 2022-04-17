@@ -1,9 +1,13 @@
-#include <catch2/catch_test_macros.hpp>
+#define CATCH_CONFIG_MAIN
+#include <catch2/catch.hpp>
 
 #include "buffer.hpp"
 #include "model.hpp"
+#include "generation.hpp"
 
-template<typename T>
+#include <charconv>
+
+template<typename T = uint8_t>
 auto next(const uint8_t*& ptr) -> decltype(T())
 {
     T elem = *((const T*)ptr);
@@ -13,7 +17,7 @@ auto next(const uint8_t*& ptr) -> decltype(T())
 
 std::string next_string(const uint8_t*& ptr)
 {
-    auto size = next<uint8_t>(ptr);
+    auto size = next(ptr);
     std::string str;
     str.resize(size);
     memcpy(str.data(), ptr, size);
@@ -98,4 +102,45 @@ TEST_CASE("User model serializes correctly", "datagen::model")
     REQUIRE(user.first_name == firstName);
     REQUIRE(user.last_name == lastName);
     REQUIRE(user.email == email);
+}
+
+TEST_CASE("Card model serializes correctly", "datagen::model")
+{
+    Card card;
+    card.type = Card::Discover;
+    card.expiration_month = 5;
+    card.expiration_year = 24;
+    card.cvv = 215;
+    card.pan = "123512351235";
+    auto buf = card.serialize();
+    auto ptr = buf.data();
+
+    auto type = (Card::CardType)next(ptr);
+    auto expiration_month = next(ptr);
+    auto expiration_year = next(ptr);
+    auto cvv = next<uint>(ptr);
+    auto pan = next_string(ptr);
+
+    REQUIRE(card.type == type);
+    REQUIRE(card.expiration_month == expiration_month);
+    REQUIRE(card.expiration_year == expiration_year);
+    REQUIRE(card.cvv == cvv);
+    REQUIRE(card.pan == pan);
+}
+
+TEST_CASE("Card generation generates valid pan", "datagen::model::card")
+{
+    Card card = generation::generate_card();
+
+    bool is_odd_dgt = true;
+    int s = 0;
+
+    for (ssize_t i = card.pan.size() - 1; i >= 0; --i)
+    {
+        int k = card.pan[i] - '0';
+        s += is_odd_dgt ? k : k != 9 ? (2 * k) % 9 : 9;
+        is_odd_dgt = !is_odd_dgt;
+    }
+
+    REQUIRE(s % 10 == 0);
 }

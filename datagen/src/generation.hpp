@@ -5,4 +5,5 @@
 namespace generation
 {
     User generate_user();
+    Card generate_card();
 }
