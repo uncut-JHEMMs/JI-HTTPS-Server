@@ -2,7 +2,9 @@
 
 #include <httpserver.hpp>
 #include <utility>
+#include <lmdb++.h>
 #include "perf_monitor.hpp"
+#include "stat_monitor.hpp"
 
 namespace resources
 {
@@ -17,18 +19,63 @@ namespace resources
     {
         const std::string p_endpoint;
         const bool p_family;
+        std::shared_ptr<Statistics> p_stats;
     public:
-        clean_resource(std::string endpoint, bool family) : p_endpoint(std::move(endpoint)), p_family(family) {}
+        clean_resource(std::string endpoint, bool family, const Ref<Statistics>& stat_data) : p_endpoint(std::move(endpoint)), p_family(family), p_stats(stat_data) {}
 
         [[nodiscard]] inline const std::string& endpoint() const noexcept { return p_endpoint; }
         [[nodiscard]] inline bool family() const noexcept { return p_family; }
+        [[nodiscard]] inline std::shared_ptr<Statistics> stats() const noexcept { return p_stats; }
+
+        inline const http_request& log_request(const http_request& req)
+        {
+            p_stats->requestsPerSecond += (unsigned int)req.get_content().size();
+            return req;
+        }
+
+        inline const Ref<http_response>& log_response(const Ref<http_response>& res)
+        {
+            using httpserver::string_response;
+            using httpserver::digest_auth_fail_response;
+
+            auto* resp = res->get_raw_response();
+            char* raw_resp = (char*)resp;
+            raw_resp += sizeof(char*) * 5;
+            raw_resp += sizeof(pthread_mutex_t);
+            raw_resp += sizeof(uint64_t) * 3;
+            size_t size = *((size_t*)raw_resp);
+
+            p_stats->responsePerSecond += (unsigned int)size;
+            return res;
+        }
     };
 
     #define SIMPLE_RESOURCE(name, method, endpoint, family) class name : public clean_resource \
     {                                                                                          \
     public:                                                                                    \
-        name() : clean_resource(endpoint, family) {}                                           \
-        const Ref<http_response> method(const http_request& req) override;                     \
+        explicit name(const Ref<Statistics>& stat_data) : clean_resource(endpoint, family, stat_data) {}\
+        const Ref<http_response> method(const http_request& req) override                      \
+        {                                                                                      \
+            return log_response(process(log_request(req)));                                    \
+        }                                                                                      \
+                                                                                               \
+        const Ref<http_response> process(const http_request& req);                             \
+    }
+
+    #define LMDB_RESOURCE(name, method, endpoint, family) class name : public clean_resource \
+    {                                                                                        \
+        Ref<lmdb::env> p_env;                                                                \
+    public:                                                                                  \
+        name(const Ref<Statistics>& stat_data, std::shared_ptr<lmdb::env> env) :             \
+            clean_resource(endpoint, family, stat_data), p_env(std::move(env))               \
+        {}                                                                                   \
+                                                                                             \
+        const Ref<http_response> method(const http_request& req) override                    \
+        {                                                                                    \
+            return log_response(process(log_request(req)));                                  \
+        }                                                                                    \
+                                                                                             \
+        const Ref<http_response> process(const http_request& req);                           \
     }
 
     #define METHOD_SIG(method) const Ref<http_response> method(const http_request& req) override
@@ -39,19 +86,26 @@ namespace resources
     {
         Ref<PerfData> data;
     public:
-        explicit digest_test(Ref<PerfData> data_ptr) : clean_resource("/test_digest", false), data(std::move(data_ptr)) {}
+        explicit digest_test(const Ref<Statistics>& stat_data, Ref<PerfData> data_ptr) : clean_resource("/test_digest", false, stat_data), data(std::move(data_ptr)) {}
 
         inline void push_access(const AccessData& accessData)
         {
             data->access_queue.push(accessData);
         }
 
-        METHOD_SIG(render_GET);
+        METHOD_SIG(render_GET)
+        {
+            return log_response(process(log_request(req)));
+        }
+
+        const Ref<http_response> process(const http_request& req);
     };
 
     SIMPLE_RESOURCE(echo_test, render, "/echo", true);
     SIMPLE_RESOURCE(empty_test, render_GET, "/empty", false);
     SIMPLE_RESOURCE(big_workload, render_GET, "/work", false);
 
-    std::vector<Ref<clean_resource>> resources(const Ref<PerfData>& data);
+    LMDB_RESOURCE(get_user, render_GET, "/user", true);
+
+    std::vector<Ref<clean_resource>> resources(const Ref<PerfData>& perf_data, const Ref<Statistics>& stat_data, Ref<lmdb::env>& env);
 }

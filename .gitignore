@@ -43,6 +43,15 @@
 # Build directory
 build/
 
+# Data directory
+data/
+
+# Log directory
+logs/
+
+# LMDB database
+*.mdb/
+
 # IDE directories and files
 .idea
 .vscode

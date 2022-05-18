@@ -15,6 +15,8 @@ RUN dnf install -y \
     python3-devel \
     lmdb-devel \
     lmdbxx-devel \
+    libxml2-devel \
+    openssl-devel \
     procps-ng \
     jq \
     valgrind \
@@ -41,6 +43,11 @@ RUN git clone --depth 1 --branch v3.10.5 https://github.com/nlohmann/json.git .
 WORKDIR build
 RUN cmake -G Ninja -DJSON_BuildTests=OFF -DCMAKE_BUILD_TYPE=${BUILD_TYPE} ..
 RUN cmake --install . --config ${BUILD_TYPE} --prefix /usr
+
+WORKDIR /dep/catch2
+RUN git clone --depth 1 --branch v3.0.0-preview4 https://github.com/catchorg/Catch2.git .
+RUN cmake -Bbuild -H. -DBUILD_TESTING=OFF -DCMAKE_INSTALL_PREFIX=/usr
+RUN cmake --build build/ --target install -j
 
 COPY . /docker_build
 WORKDIR /docker_build/build

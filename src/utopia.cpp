@@ -3,11 +3,13 @@
 #include <spdlog/spdlog.h>
 #include <spdlog/sinks/stdout_color_sinks.h>
 #include <spdlog/sinks/daily_file_sink.h>
+#include <filesystem>
 #include <csignal>
 
 #include "server_opts.hpp"
 #include "resources.hpp"
 #include "perf_monitor.hpp"
+#include "stat_monitor.hpp"
 
 void initialize_logging()
 {
@@ -39,9 +41,12 @@ int utopia::run(int argc, const char** argv)
 
     auto opts = parse_options(argc, argv);
     auto [perf_data, perf_thread] = perf_monitor::initialize();
+    auto [stat_data, stat_thread] = stat_monitor::initialize();
 
     auto builder = create_webserver(opts.port)
             .digest_auth()
+            .file_upload_target(httpserver::FILE_UPLOAD_DISK_ONLY)
+            .generate_random_filename_on_upload()
             .max_connections(opts.max_connections)
             .connection_timeout(opts.timeout)
             .log_access([](const auto& url) {
@@ -84,8 +89,22 @@ int utopia::run(int argc, const char** argv)
     // Setup logging for the server
     initialize_logging();
 
+    // Check for LMDB database (TODO: Get directory from config)
+    std::shared_ptr<lmdb::env> env = nullptr;
+    if (std::filesystem::is_directory("transactions.mdb"))
+    {
+        env = std::make_shared<lmdb::env>(lmdb::env::create());
+        env->set_max_dbs(5);
+        env->open("transactions.mdb", MDB_RDONLY, 0);
+    }
+    else
+    {
+        spdlog::critical("Unable to load LMDB database at `transactions.mdb`!");
+        return 1;
+    }
+
     httpserver::webserver ws = builder;
-    auto resource_list = resources::resources(perf_data);
+    auto resource_list = resources::resources(perf_data, stat_data, env);
     for (auto& resource : resource_list)
     {
         ws.register_resource(resource->endpoint(), resource.get(), resource->family());
@@ -104,11 +123,13 @@ int utopia::run(int argc, const char** argv)
         ws.sweet_kill();
 
     perf_data->should_close = true;
+    stat_data->should_close = true;
 
     // Interrupt any threads that are waiting for a value from the queue
     perf_data->access_queue.interrupt();
 
     perf_thread.join();
+    stat_thread.join();
 
     spdlog::debug("All threads done and webserver gracefully killed.");
     return 0;
