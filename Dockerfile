@@ -11,6 +11,12 @@ RUN dnf install -y \
     libmicrohttpd-devel \
     gnutls-devel \
     spdlog-devel \
+    boost-devel \
+    python3-devel \
+    lmdb-devel \
+    lmdbxx-devel \
+    libxml2-devel \
+    openssl-devel \
     procps-ng \
     jq \
     valgrind \
@@ -25,7 +31,7 @@ ENV BUILD_TYPE=Release
 FROM base as build
 WORKDIR /dep/libhttpserver
 RUN git clone https://github.com/etr/libhttpserver.git .
-RUN git reset 4eb69fb --hard
+RUN git reset 31dfed7 --hard
 RUN ./bootstrap
 WORKDIR build
 RUN ../configure --prefix=/usr
@@ -38,6 +44,11 @@ WORKDIR build
 RUN cmake -G Ninja -DJSON_BuildTests=OFF -DCMAKE_BUILD_TYPE=${BUILD_TYPE} ..
 RUN cmake --install . --config ${BUILD_TYPE} --prefix /usr
 
+WORKDIR /dep/catch2
+RUN git clone --depth 1 --branch v3.0.0-preview4 https://github.com/catchorg/Catch2.git .
+RUN cmake -Bbuild -H. -DBUILD_TESTING=OFF -DCMAKE_INSTALL_PREFIX=/usr
+RUN cmake --build build/ --target install -j
+
 COPY . /docker_build
 WORKDIR /docker_build/build
 RUN cmake -G Ninja -DCMAKE_EXPORT_COMPILE_COMMANDS=ON -DCMAKE_BUILD_TYPE=${BUILD_TYPE} -DCMAKE_MODULE_PATH=/usr/lib64/cmake/nlohmann_json:/usr/lib64/ ..
@@ -45,9 +56,10 @@ RUN cmake --build . --config ${BUILD_TYPE} -j
 RUN mkdir /server
 RUN cp /docker_build/build/bin/${BUILD_TYPE}/ /server/bin -r
 WORKDIR /server
-RUN if [ -f /docker_build/cert.pem ]; then cp /docker_build/cert.pem /server/cert.pem; else cp /dep/libhttpserver/examples/cert.pem /server/cert.pem; fi
-RUN if [ -f /docker_build/key.pem ]; then cp /docker_build/key.pem /server/key.pem; else cp /dep/libhttpserver/examples/key.pem /server/key.pem; fi
+
+RUN if [ -f /docker_build/cert.pem ]; then cp /docker_build/cert.pem /server/cert.pem; fi
+RUN if [ -f /docker_build/key.pem ]; then cp /docker_build/key.pem /server/key.pem; fi
 RUN if [ -f /docker_build/config.json ]; then cp /docker_build/config.json /server/config.json; else echo "{}" >> /server/config.json; fi
 ENV UTOPIA_CONFIG_FILE=/server/config.json
 
-CMD [ "/server/bin/HTTPS-Server", "-C", "/server/cert.pem", "-K", "/server/key.pem" ]
+CMD [ "/server/bin/utopia-server" ]

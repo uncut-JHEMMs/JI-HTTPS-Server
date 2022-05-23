@@ -20,9 +20,16 @@ namespace env
         return {};
     }
 
-    std::string get_string(const char* name, std::string def)
+    std::string get_string(const char* name, const char* def)
     {
         return get_string(name).value_or(def);
+    }
+
+    std::optional<std::string> get_string(const char* name, const std::optional<std::string>& def)
+    {
+        if (def.has_value())
+            return get_string(name).value_or(*def);
+        return get_string(name);
     }
 
     std::optional<bool> get_bool(const char* name)

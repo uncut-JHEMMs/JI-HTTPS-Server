@@ -4,8 +4,8 @@
 #include <fstream>
 #include <nlohmann/json.hpp>
 
-#include "env.hpp"
-#include "popl.hpp"
+#include "helpers/env.hpp"
+#include "helpers/popl.hpp"
 
 namespace fs = std::filesystem;
 
@@ -22,7 +22,9 @@ namespace fs = std::filesystem;
  *      "ipv6": bool,
  *      "ipv4": bool,
  *      "certificate": string,
- *      "private_key": string
+ *      "private_key": string,
+ *      "document_certificate": string,
+ *      "document_private_key": string
  * }
  * @endcode
  * @param file Path to the json config file to process.
@@ -53,6 +55,8 @@ ServerOptions parse_options_from_file(const fs::path& file)
     opts.use_ipv4 = get_or_default("ipv4", opts.use_ipv4);
     opts.certificate = get_or_default("certificate", opts.certificate);
     opts.private_key = get_or_default("private_key", opts.private_key);
+    opts.document_certificate = get_or_default("document_certificate", opts.certificate);
+    opts.document_private_key = get_or_default("document_private_key", opts.private_key);
 
     return opts;
 }
@@ -76,6 +80,8 @@ ServerOptions parse_options(int argc, const char** argv)
     options.use_ipv6 = env::get_bool("UTOPIA_USE_IPV6", options.use_ipv6);
     options.certificate = env::get_string("UTOPIA_CERTIFICATE", options.certificate);
     options.private_key = env::get_string("UTOPIA_PRIVATE_KEY", options.private_key);
+    options.document_certificate = env::get_string("UTOPIA_DOCUMENT_CERTIFICATE", options.document_certificate);
+    options.document_private_key = env::get_string("UTOPIA_DOCUMENT_PRIVATE_KEY", options.document_private_key);
 
     popl::OptionParser op("OPTIONS");
     auto help_opt = op.add<popl::Switch>("h", "help", "show this message");
@@ -143,9 +149,6 @@ ServerOptions parse_options(int argc, const char** argv)
     //               So I suppose it's fine?
     if (!options.use_ipv4 && !options.use_ipv6)
         throw std::invalid_argument("both ipv4 and ipv6 are disallowed, so no connections can be made!");
-
-    if (options.certificate.empty() || options.private_key.empty())
-        throw std::invalid_argument("A certificate and private key must be given for authentication!");
 
     return options;
 }
