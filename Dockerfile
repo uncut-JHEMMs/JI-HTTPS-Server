@@ -31,7 +31,7 @@ ENV BUILD_TYPE=Release
 FROM base as build
 WORKDIR /dep/libhttpserver
 RUN git clone https://github.com/etr/libhttpserver.git .
-RUN git reset 4eb69fb --hard
+RUN git reset 31dfed7 --hard
 RUN ./bootstrap
 WORKDIR build
 RUN ../configure --prefix=/usr
