@@ -7,7 +7,6 @@
 #include <utility>
 
 #include <lmdb++.h>
-#include <uuid/uuid.h>
 
 #include "generation.hpp"
 
