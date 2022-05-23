@@ -3,8 +3,8 @@
 #include <httpserver.hpp>
 #include <utility>
 #include <lmdb++.h>
-#include "perf_monitor.hpp"
-#include "stat_monitor.hpp"
+#include "monitors/perf_monitor.hpp"
+#include "monitors/stat_monitor.hpp"
 
 namespace resources
 {
@@ -105,7 +105,18 @@ namespace resources
     SIMPLE_RESOURCE(empty_test, render_GET, "/empty", false);
     SIMPLE_RESOURCE(big_workload, render_GET, "/work", false);
 
-    LMDB_RESOURCE(get_user, render_GET, "/user", true);
+    namespace model
+    {
+        LMDB_RESOURCE(get_user, render_GET, "/user", true);
+        LMDB_RESOURCE(get_transaction_types, render_GET, "/transaction_types", true);
+    }
+
+    namespace analytics
+    {
+        LMDB_RESOURCE(get_top5_transactions_by_zip, render_GET, "/top5/transactions/zip", true);
+        LMDB_RESOURCE(get_top5_transactions_by_city, render_GET, "/top5/transactions/city", true);
+        LMDB_RESOURCE(query_transactions, render_GET, "/query/transactions", true);
+    }
 
     std::vector<Ref<clean_resource>> resources(const Ref<PerfData>& perf_data, const Ref<Statistics>& stat_data, Ref<lmdb::env>& env);
 }

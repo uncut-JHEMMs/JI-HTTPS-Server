@@ -4,6 +4,7 @@
 #include <fstream>
 #include <algorithm>
 #include <charconv>
+#include <utility>
 
 #include <lmdb++.h>
 #include <uuid/uuid.h>
@@ -46,6 +47,20 @@ auto next_as(std::basic_istream<CharType, Traits>& input, CharType delim) -> dec
     }
 }
 
+template<typename CharType, typename Traits>
+std::string next_quoted(std::basic_istream<CharType, Traits>& input, CharType delim)
+{
+    std::basic_string<CharType, Traits> result;
+    do
+    {
+        std::basic_string<CharType, Traits> line;
+        std::getline(input, line, delim);
+        result += line;
+    }
+    while (!result.empty() && result[result.size() - 1] != '"');
+    return result;
+}
+
 void datagen::process(const fs::path& data_path, const fs::path& db_dir)
 {
     /**
@@ -60,20 +75,22 @@ void datagen::process(const fs::path& data_path, const fs::path& db_dir)
     auto env = lmdb::env::create();
     mdb_env_set_maxdbs(env, 5);
     mdb_env_set_mapsize(env, 1024u * 1024u * 1024u * 10u);
-    env.open(db_dir.c_str());
+    env.open(db_dir.c_str(), MDB_WRITEMAP);
 
     auto start = std::chrono::system_clock::now();
     file.open(data_path / "users.ssv");
     {
         auto transaction = lmdb::txn::begin(env);
         MDB_dbi users_dbi = lmdb::dbi::open(transaction, "users", MDB_CREATE);
-        std::string user_id;
-        while (file >> user_id)
+        std::string user_id_str;
+        while (file >> user_id_str)
         {
+            uint16_t user_id;
+            std::from_chars(user_id_str.c_str(), user_id_str.c_str() + user_id_str.size(), user_id);
             auto user = generation::generate_user();
             auto serialized = user.serialize();
 
-            MDB_val key{ user_id.size(), user_id.data() };
+            MDB_val key{ sizeof(uint16_t), &user_id };
             MDB_val val = serialized;
             mdb_put(transaction, users_dbi, &key, &val, 0);
         }
@@ -89,19 +106,17 @@ void datagen::process(const fs::path& data_path, const fs::path& db_dir)
         while (file >> card_data)
         {
             std::istringstream in{card_data};
-            std::string user_id;
-            std::string card_id;
-            std::getline(in, user_id, ',');
-            std::getline(in, card_id, ',');
-
-            std::string real_id = user_id;
-            real_id += '.';
-            real_id.append(card_id);
+            uint16_t user_id = next_as<uint16_t>(in, ',');
+            uint8_t card_id = next_as<uint8_t>(in, ',');
 
             auto card = generation::generate_card();
             auto serialized = card.serialize();
 
-            MDB_val key{ real_id.size(), real_id.data() };
+            Buffer buff(sizeof(uint16_t) + sizeof(uint8_t));
+            buff.write(user_id);
+            buff.write(card_id);
+
+            MDB_val key = buff;
             MDB_val val = serialized;
             mdb_put(transaction, cards_dbi, &key, &val, 0);
         }
@@ -117,15 +132,13 @@ void datagen::process(const fs::path& data_path, const fs::path& db_dir)
         while (file >> merchant_data)
         {
             std::istringstream in{merchant_data};
-            std::string merchant_id;
-            std::string mcc;
-            std::getline(in, merchant_id, ',');
-            std::getline(in, mcc, ',');
+            int64_t merchant_id = next_as<int64_t>(in, ',');
+            std::string mcc = next_as<std::string>(in, ',');
 
             auto merchant = generation::generate_merchant(mcc);
             auto serialized = merchant.serialize();
 
-            MDB_val key{merchant_id.size(), merchant_id.data()};
+            MDB_val key{sizeof(merchant_id), &merchant_id};
             MDB_val val = serialized;
             mdb_put(transaction, merchants_dbi, &key, &val, 0);
         }
@@ -204,20 +217,29 @@ void datagen::process(const fs::path& data_path, const fs::path& db_dir)
     file.open(data_path / "transactions.csv");
     {
         auto transaction = lmdb::txn::begin(env);
-        MDB_dbi transactions_dbi = lmdb::dbi::open(transaction, "transactions", MDB_CREATE);
+        MDB_dbi offsets_dbi = lmdb::dbi::open(transaction, "user_offsets", MDB_CREATE);
+
         std::string line;
+        uint16_t cur_id = std::numeric_limits<uint16_t>::max();
         while (std::getline(file, line))
         {
             std::istringstream iss{line};
-            uuid_t uuid;
-            uuid_generate(uuid);
+            uint16_t uid = next_as<uint16_t>(iss, ',');
 
-            auto user = next_as<std::string>(iss, ',');
-            auto card = next_as<std::string>(iss, ',');
-            auto year = next_as<uint16_t>(iss, ',');
-            auto month = next_as<uint8_t>(iss, ',');
+            if (cur_id == uid)
+                continue;
+
+            auto read = line.size() + !file.eof();
+            uint64_t position = file.gcount() - read;
+
+            MDB_val key{sizeof(uid), &uid};
+            MDB_val val{sizeof(position), &position};
+            mdb_put(transaction, offsets_dbi, &key, &val, 0);
+            cur_id = uid;
         }
+        transaction.commit();
     }
+    file.close();
 
     auto end = std::chrono::system_clock::now();
 

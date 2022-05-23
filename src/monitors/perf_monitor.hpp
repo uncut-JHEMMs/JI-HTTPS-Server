@@ -8,7 +8,7 @@
 #include <tuple>
 #include <thread>
 
-#include "thread_safe_queue.hpp"
+#include "helpers/thread_safe_queue.hpp"
 
 enum AccessStatus
 {

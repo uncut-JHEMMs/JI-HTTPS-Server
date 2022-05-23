@@ -28,6 +28,8 @@ target_link_libraries(datagen ${Boost_LIBS} ${LMDB_LIB} ${LIBUUID_LIBRARY} Faker
 target_compile_features(datagen PUBLIC cxx_std_17)
 set_target_properties(datagen PROPERTIES PUBLIC_HEADER "src/buffer.hpp src/datagen.hpp src/generation.hpp src/model.hpp")
 
+set(CXX_EXTENSIONS OFF)
+
 add_executable(datagen-cli src/main.cpp)
 target_link_libraries(datagen-cli datagen)
 target_compile_features(datagen-cli PUBLIC cxx_std_17)

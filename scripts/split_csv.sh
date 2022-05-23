@@ -5,7 +5,7 @@ extract()
   _path=$1
   _fields=$2
 
-  cat $_path | cut -d',' -f$_fields | tail -n+2 | sort | uniq | tr '\n' ' ' | xargs
+  cat $_path | cut -d',' -f$_fields | tail -n+2 | sort | uniq | tr '\n' ' ' | sed 's/ *$//'
 }
 
 extract $1 1 > data/users.ssv

@@ -101,3 +101,27 @@ struct Merchant
         return buffer;
     }
 };
+
+namespace Transaction
+{
+    enum Type : uint8_t
+    {
+        Chip,
+        Online,
+        Swipe,
+        Unknown
+    };
+
+    enum Error : uint8_t
+    {
+        None = 0,
+        BadCVV = (1 << 0),
+        InsufficientBalance = (1 << 1),
+        TechnicalGlitch = (1 << 2),
+        BadCardNumber = (1 << 3),
+        BadExpiration = (1 << 4),
+        BadPIN = (1 << 5),
+        BadZipcode = (1 << 6),
+        UnknownError = (1 << 7)
+    };
+}

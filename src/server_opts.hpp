@@ -28,6 +28,8 @@ struct ServerOptions
     bool use_ipv4 = true;
     std::optional<std::string> certificate;
     std::optional<std::string> private_key;
+    std::optional<std::string> document_certificate;
+    std::optional<std::string> document_private_key;
 };
 
 /**

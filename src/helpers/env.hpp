@@ -12,7 +12,8 @@ namespace env
     //               for the future.
     std::optional<uint16_t> get_int(const char* name);
 
-    std::string get_string(const char* name, std::string def);
+    std::string get_string(const char* name, const char* def);
+    std::optional<std::string> get_string(const char* name, const std::optional<std::string>& def);
     bool get_bool(const char* name, bool def);
     uint16_t get_int(const char* name, uint16_t def);
 }

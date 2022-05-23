@@ -17,12 +17,16 @@ endif()
 
 set(PROJECT_SOURCES
     src/utopia.cpp
-    src/env.cpp
     src/server_opts.cpp
-    src/perf_monitor.cpp
-    src/stat_monitor.cpp
-    src/resources.cpp
-    src/utilities.cpp)
+    src/models.cpp
+    src/monitors/perf_monitor.cpp
+    src/monitors/stat_monitor.cpp
+    src/resources/resources.cpp
+    src/resources/model.cpp
+    src/resources/analytics.cpp
+    src/helpers/env.cpp
+    src/helpers/utilities.cpp
+    src/helpers/xml_builder.cpp)
 
 add_library(${PROJECT_NAME} ${PROJECT_SOURCES})
 
@@ -98,14 +102,13 @@ find_package(spdlog REQUIRED)
 find_package(PkgConfig REQUIRED)
 find_package(LibXml2 REQUIRED)
 find_package(OpenSSL REQUIRED)
-find_package(XercesC REQUIRED)
 pkg_check_modules(LIBHTTPSERVER REQUIRED libhttpserver)
 
 find_library(LMDB_LIB NAMES lmdb REQUIRED)
 find_path(LMDB_INCLUDE_DIR NAMES lmdb.h REQUIRED)
 find_path(LMDB++_INCLUDE_DIR NAMES lmdb++.h REQUIRED)
 
-target_link_libraries(${PROJECT_NAME} ${LIBHTTPSERVER_LIBRARIES} ${LMDB_LIB} spdlog::spdlog nlohmann_json::nlohmann_json Threads::Threads LibXml2::LibXml2 OpenSSL::SSL OpenSSL::Crypto XercesC::XercesC Faker::Faker)
+target_link_libraries(${PROJECT_NAME} ${LIBHTTPSERVER_LIBRARIES} ${LMDB_LIB} spdlog::spdlog nlohmann_json::nlohmann_json Threads::Threads LibXml2::LibXml2 OpenSSL::SSL OpenSSL::Crypto Faker::Faker)
 target_include_directories(${PROJECT_NAME} PUBLIC ${LIBHTTPSERVER_INCLUDE_DIRS} ${LMDB_INCLUDE_DIR} ${LMDB++_INCLUDE_DIR} ${CMAKE_CURRENT_SOURCE_DIR}/src)
 target_compile_options(${PROJECT_NAME} PUBLIC ${LIBHTTPSERVER_CFLAGS_OTHER})
 

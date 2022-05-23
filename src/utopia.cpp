@@ -8,8 +8,8 @@
 
 #include "server_opts.hpp"
 #include "resources.hpp"
-#include "perf_monitor.hpp"
-#include "stat_monitor.hpp"
+#include "monitors/perf_monitor.hpp"
+#include "monitors/stat_monitor.hpp"
 
 void initialize_logging()
 {

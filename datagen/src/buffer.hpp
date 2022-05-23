@@ -5,6 +5,7 @@
 #include <string>
 #include <iostream>
 #include <cstring>
+#include <utility>
 
 #include <lmdb.h>
 
@@ -32,6 +33,10 @@ class Buffer
 public:
     Buffer() : m_offset(0), m_data() {};
     explicit Buffer(std::size_t reserve) : m_offset(0) { m_data.reserve(reserve); }
+
+    Buffer(Buffer&& other) noexcept :
+        m_offset(std::exchange(other.m_offset, 0)), m_data(std::move(other.m_data))
+    {}
 
     inline std::size_t size() const noexcept { return m_data.size(); }
     inline const uint8_t* data() const noexcept { return m_data.data(); }
