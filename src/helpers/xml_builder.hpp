@@ -62,6 +62,21 @@ public:
         return add_array(name, attributes, std::vector<T>{elems}, for_each);
     }
 
+    template<typename InputIterator, typename Func>
+    inline XmlBuilder& add_iterator(const std::string_view& name, const attribute_map& attributes, InputIterator begin, InputIterator end, Func for_each)
+    {
+        add_child(name, attributes);
+        for (; begin != end; ++begin)
+            for_each(*this, *begin);
+        return step_up();
+    }
+
+    template<typename InputIterator, typename Func>
+    inline XmlBuilder& add_iterator(const std::string_view& name, InputIterator begin, InputIterator end, Func for_each)
+    {
+        return add_iterator(name, attribute_map{}, begin, end, for_each);
+    }
+
     inline static void initialize_signing(std::string certificate, std::string private_key)
     {
         XmlBuilder::s_certificate = std::move(certificate);
