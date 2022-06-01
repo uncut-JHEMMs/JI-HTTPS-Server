@@ -118,6 +118,7 @@ namespace resources
         LMDB_RESOURCE(get_top5_transactions_by_city, render_GET, "/top5/transactions/city", true);
         LMDB_RESOURCE(query_transactions, render_GET, "/query/transactions", true);
         LMDB_RESOURCE(total_fraud_free_transactions, render_GET, "/query/fraud_free_transactions", true);
+        LMDB_RESOURCE(top_10_largest_transactions, render_GET, "/top10/transactions", true);
     }
 
     std::vector<Ref<clean_resource>> resources(const Ref<PerfData>& perf_data, const Ref<Statistics>& stat_data, Ref<lmdb::env>& env);

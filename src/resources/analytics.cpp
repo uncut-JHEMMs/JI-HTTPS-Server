@@ -3,6 +3,7 @@
 #include <fstream>
 #include <charconv>
 #include <optional>
+#include <iomanip>
 
 #include "models.hpp"
 #include "helpers/xml_builder.hpp"
@@ -475,6 +476,71 @@ namespace resources::analytics
         }
     }
 
+    models::Transaction parse_transaction(const std::string& line)
+    {
+        std::istringstream iss{line};
+        auto get_amount = [&iss]() -> long {
+            std::string amount_str;
+            std::getline(iss, amount_str, ',');
+
+            bool negative = amount_str[1] == '-';
+            auto idx = amount_str.find('.');
+
+            long dollars, cents;
+            std::from_chars(amount_str.c_str() + 1 + negative, amount_str.c_str() + idx, dollars);
+            std::from_chars(amount_str.c_str() + idx + 1, amount_str.c_str() + amount_str.size(), cents);
+
+            return (dollars * 100 + cents) * (negative ? -1 : 1);
+        };
+
+        auto user_id = next_as<uint16_t>(iss);
+        auto card_id = next_as<uint8_t>(iss);
+        auto year = next_as<uint16_t>(iss);
+        auto month = next_as<uint8_t>(iss);
+        auto day = next_as<uint8_t>(iss);
+        auto hour = next_as<uint8_t>(iss, ':');
+        auto minute = next_as<uint8_t>(iss);
+        auto amount = get_amount();
+        auto transaction_type = next_as<models::TransactionType>(iss);
+        auto merchant_id = next_as<int64_t>(iss);
+        auto merchant_city = next_as(iss);
+        auto merchant_state = next_as(iss);
+        auto merchant_zip = next_as<std::optional<uint32_t>>(iss);
+        auto merchant_mcc = next_as<uint32_t>(iss);
+        auto error_str = next_as(iss, ',', true);
+        auto fraud = next_as<bool>(iss);
+
+        std::vector<std::string> errors;
+
+        std::string error;
+        std::istringstream _iss{error_str};
+        while (std::getline(_iss, error, ','))
+            errors.push_back(error);
+
+        struct tm date{};
+        date.tm_year = year - 1900;
+        date.tm_mon = month - 1;
+        date.tm_mday = day;
+        date.tm_hour = hour;
+        date.tm_min = minute;
+        time_t time = mktime(&date);
+
+        return models::Transaction {
+            user_id,
+            card_id,
+            time,
+            amount,
+            transaction_type,
+            merchant_id,
+            merchant_city,
+            merchant_state,
+            merchant_zip.has_value() ? *merchant_zip : 0,
+            merchant_mcc,
+            errors,
+            fraud
+        };
+    }
+
     const Ref<http_response> query_transactions::process(const http_request& req)
     {
         auto& args = req.get_args();
@@ -873,6 +939,259 @@ namespace resources::analytics
             });
 
         state_cursor.close();
+        rtxn.abort();
+
+        return std::make_shared<string_response>(builder.serialize(), 200, "application/xml");
+    }
+
+    const Ref<http_response> top_10_largest_transactions::process(const http_request& req)
+    {
+        std::array<std::pair<long, models::Transaction>, 10> top10;
+        int filled = 0;
+
+        std::ifstream transactions("data/transactions.csv");
+        std::string line;
+        std::getline(transactions, line);
+        while (std::getline(transactions, line))
+        {
+            std::istringstream iss{line};
+            auto skip = [&iss](int count) {
+                std::string _;
+                for (int i = 0; i < count; ++i)
+                    std::getline(iss, _, ',');
+            };
+            auto get_amount = [&iss, &skip]() -> long {
+                skip(6);
+                std::string amount_str;
+                std::getline(iss, amount_str, ',');
+
+                bool negative = amount_str[1] == '-';
+                auto idx = amount_str.find('.');
+
+                long dollars, cents;
+                std::from_chars(amount_str.c_str() + 1 + negative, amount_str.c_str() + idx, dollars);
+                std::from_chars(amount_str.c_str() + idx + 1, amount_str.c_str() + amount_str.size(), cents);
+
+                return (dollars * 100 + cents) * (negative ? -1 : 1);
+            };
+
+            auto amount = get_amount();
+            if (filled == 10 && amount < top10[top10.size()-1].first)
+                continue;
+
+            auto transaction = parse_transaction(line);
+            if (transaction.is_fraud || !transaction.errors.empty())
+                continue;
+
+            if (filled < 10)
+            {
+                top10[(size_t)filled] = std::make_pair(amount, transaction);
+                std::sort(top10.begin(), top10.begin() + filled + 1, [](const auto& p1, const auto& p2) { return p1.first > p2.first; });
+                filled++;
+            }
+            else
+            {
+                top10[top10.size()-1] = std::make_pair(amount, transaction);
+                std::sort(top10.begin(), top10.end(), [](const auto& p1, const auto& p2) { return p1.first > p2.first; });
+            }
+        }
+
+        auto rtxn = lmdb::txn::begin(*p_env, nullptr, MDB_RDONLY);
+        auto user_dbi = lmdb::dbi::open(rtxn, "users");
+        auto card_dbi = lmdb::dbi::open(rtxn, "cards");
+        auto merchant_dbi = lmdb::dbi::open(rtxn, "merchants");
+        auto user_cursor = lmdb::cursor::open(rtxn, user_dbi);
+        auto card_cursor = lmdb::cursor::open(rtxn, card_dbi);
+        auto merchant_cursor = lmdb::cursor::open(rtxn, merchant_dbi);
+
+        XmlBuilder builder;
+        builder
+            .add_signature()
+            .add_child("Data")
+                .add_iterator("Results", {{"count", "10"}, {"orderBy", "transaction_size"}, {"orderDir", "descending"}}, top10.begin(), top10.end(), [&](XmlBuilder& b, const auto& pair) {
+                    b.add_child("Result").add_child("Transaction");
+                    models::Transaction t = pair.second;
+                    // Amount
+                    {
+                        long dollars, cents;
+                        dollars = t.amount / 100;
+                        cents = t.amount < 0 ? (t.amount * -1) % 100 : t.amount % 100;
+                        std::ostringstream ss;
+                        ss << "$" << dollars << "." << std::setw(2) << cents;
+                        b.add_string("Amount", ss.str());
+                    }
+
+                    // User/Card
+                    {
+                        MDB_val key{sizeof(t.user_id), &t.user_id};
+                        MDB_val result;
+
+                        if (mdb_cursor_get(user_cursor, &key, &result, MDB_SET) == MDB_SUCCESS)
+                        {
+                            auto* raw = (const uint8_t*)result.mv_data;
+                            std::string first_name = next_as<std::string>(raw);
+                            std::string last_name = next_as<std::string>(raw);
+                            std::string email = next_as<std::string>(raw);
+
+                            b
+                                    .add_child("User", {{ "id", std::to_string(t.user_id) }})
+                                    .add_string("FirstName", first_name)
+                                    .add_string("LastName", last_name)
+                                    .add_string("Email", email);
+                        }
+
+                        key = MDB_val{sizeof(t.user_id) + sizeof(t.card_id), &t.user_id};
+
+                        if (mdb_cursor_get(card_cursor, &key, &result, MDB_SET) == MDB_SUCCESS)
+                        {
+                            auto* raw = (const uint8_t*)result.mv_data;
+                            auto type = next_as(raw);
+                            std::string type_str;
+                            switch (type)
+                            {
+                            case 0:
+                                type_str = "American Express";
+                                break;
+                            case 1:
+                                type_str = "Visa";
+                                break;
+                            case 2:
+                                type_str = "Mastercard";
+                                break;
+                            default:
+                                type_str = "Unknown";
+                                break;
+                            }
+                            auto expire_month = next_as(raw);
+                            auto expire_year = next_as(raw);
+                            auto cvv = next_as<uint>(raw);
+                            auto pan = next_as<std::string>(raw);
+
+                            b
+                                    .add_child("Card", {{ "id", std::to_string(t.card_id) }})
+                                    .add_string("CardType", type_str)
+                                    .add_string("Expires",
+                                            std::to_string(expire_month) + "/" + std::to_string(expire_year))
+                                    .add_string("CVV", std::to_string(cvv))
+                                    .add_string("PAN", pan)
+                                    .step_up()
+                                    .step_up();
+                        }
+                    }
+
+                    // Date
+                    {
+                        char mbstr[100];
+                        std::strftime(mbstr, 100, "%T %m/%d/%Y", std::localtime(&t.time));
+                        b
+                            .add_string("DateTime", std::string(mbstr));
+                    }
+
+                    // Transaction Type
+                    {
+                        switch (t.type)
+                        {
+                        case models::TransactionType::Chip:
+                            b.add_string("TransactionType", "Chip Transaction");
+                            break;
+                        case models::TransactionType::Online:
+                            b.add_string("TransactionType", "Online Transaction");
+                            break;
+                        case models::TransactionType::Swipe:
+                            b.add_string("TransactionType", "Swipe Transaction");
+                            break;
+                        case models::TransactionType::Unknown:
+                            b.add_string("TransactionType", "Unknown Transaction");
+                            break;
+                        }
+                    }
+
+                    // Merchant
+                    {
+                        MDB_val key{sizeof(t.merchant_id), &t.merchant_id};
+                        MDB_val result;
+
+                        if (mdb_cursor_get(merchant_cursor, &key, &result, MDB_SET) == MDB_SUCCESS)
+                        {
+                            auto* raw = (const uint8_t*)result.mv_data;
+                            auto name = next_as<std::string>(raw);
+                            auto mcc = next_as<uint>(raw);
+                            auto category = (models::MerchantCategory)next_as(raw);
+                            std::string category_str;
+
+                            switch (category)
+                            {
+                            case models::MerchantCategory::Agricultural:
+                                category_str = "Agricultural";
+                                break;
+                            case models::MerchantCategory::Contracted:
+                                category_str = "Contracted";
+                                break;
+                            case models::MerchantCategory::TravelAndEntertainment:
+                                category_str = "Travel and Entertainment";
+                                break;
+                            case models::MerchantCategory::CarRental:
+                                category_str = "Car Rental";
+                                break;
+                            case models::MerchantCategory::Lodging:
+                                category_str = "Lodging";
+                                break;
+                            case models::MerchantCategory::Transportation:
+                                category_str = "Transportation";
+                                break;
+                            case models::MerchantCategory::Utility:
+                                category_str = "Utility";
+                                break;
+                            case models::MerchantCategory::RetailOutlet:
+                                category_str = "Retail Outlet";
+                                break;
+                            case models::MerchantCategory::ClothingStore:
+                                category_str = "Clothing Store";
+                                break;
+                            case models::MerchantCategory::MiscStore:
+                                category_str = "Miscellaneous Store";
+                                break;
+                            case models::MerchantCategory::Business:
+                                category_str = "Business";
+                                break;
+                            case models::MerchantCategory::ProfessionalOrMembership:
+                                category_str = "Professional or Membership";
+                                break;
+                            case models::MerchantCategory::Government:
+                                category_str = "Government";
+                                break;
+                            }
+
+                            b
+                                    .add_child("Merchant", {{ "ID", std::to_string(t.merchant_id) }})
+                                    .add_string("Name", name)
+                                    .add_string("MCC", std::to_string(mcc))
+                                    .add_string("BusinessCategory", category_str)
+                                    .step_up();
+                        }
+                    }
+
+                    // Location
+                    {
+                        if (t.zip != 0)
+                        {
+                            b
+                                .add_string("City", t.merchant_city)
+                                .add_string("State", t.merchant_state)
+                                .add_string("Zip", std::to_string(t.zip));
+                        }
+                        else if (t.zip == 0 && !t.merchant_state.empty())
+                        {
+                            b
+                                .add_string("Country", t.merchant_state);
+                        }
+                    }
+                    b.step_up().step_up();
+                });
+
+        user_cursor.close();
+        card_cursor.close();
+        merchant_cursor.close();
         rtxn.abort();
 
         return std::make_shared<string_response>(builder.serialize(), 200, "application/xml");
