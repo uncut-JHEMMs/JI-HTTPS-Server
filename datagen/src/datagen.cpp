@@ -123,6 +123,45 @@ void datagen::process(const fs::path& data_path, const fs::path& db_dir)
     }
     file.close();
 
+    std::unordered_map<int64_t, std::vector<Location>> locations;
+    file.open(data_path / "merchant_locations.ssv");
+    {
+        std::string location_line;
+        while (std::getline(file, location_line))
+        {
+            std::istringstream iss{location_line};
+
+            auto id = next_as<int64_t>(iss, ',');
+            auto city = next_as<std::string>(iss, ',');
+            auto state = next_as<std::string>(iss, ',');
+            auto zip_str = next_as<std::string>(iss, ',');
+            uint32_t zip;
+            if (zip_str.empty())
+                zip = 0;
+            else
+                std::from_chars(zip_str.c_str(), zip_str.c_str() + zip_str.size(), zip);
+
+            Location loc;
+
+            if (city == " ONLINE")
+            {
+                city = "ONLINE";
+                loc.online = true;
+            }
+            loc.city = city;
+            loc.state = state;
+            if (state.size() > 2)
+                loc.foreign = true;
+            loc.zip = zip;
+
+            if (!locations.count(id))
+                locations.emplace(id, std::vector<Location>{});
+
+            locations[id].push_back(loc);
+        }
+    }
+    file.close();
+
     file.open(data_path / "merchants.ssv");
     {
         auto transaction = lmdb::txn::begin(env);
@@ -135,6 +174,8 @@ void datagen::process(const fs::path& data_path, const fs::path& db_dir)
             std::string mcc = next_as<std::string>(in, ',');
 
             auto merchant = generation::generate_merchant(mcc);
+            merchant.locations = locations[merchant_id];
+
             auto serialized = merchant.serialize();
 
             MDB_val key{sizeof(merchant_id), &merchant_id};
@@ -213,7 +254,7 @@ void datagen::process(const fs::path& data_path, const fs::path& db_dir)
     }
     file.close();
 
-    file.open(data_path / "transactions.csv");
+    /*file.open(data_path / "transactions.csv");
     {
         auto transaction = lmdb::txn::begin(env);
         MDB_dbi offsets_dbi = lmdb::dbi::open(transaction, "user_offsets", MDB_CREATE);
@@ -238,7 +279,7 @@ void datagen::process(const fs::path& data_path, const fs::path& db_dir)
         }
         transaction.commit();
     }
-    file.close();
+    file.close();*/
 
     auto end = std::chrono::system_clock::now();
 

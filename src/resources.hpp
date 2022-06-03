@@ -1,8 +1,13 @@
 #pragma once
 
 #include <httpserver.hpp>
+
 #include <utility>
+#include <fstream>
+
 #include <lmdb++.h>
+#include <nlohmann/json-schema.hpp>
+
 #include "monitors/perf_monitor.hpp"
 #include "monitors/stat_monitor.hpp"
 
@@ -119,6 +124,30 @@ namespace resources
         LMDB_RESOURCE(query_transactions, render_GET, "/query/transactions", true);
         LMDB_RESOURCE(total_fraud_free_transactions, render_GET, "/query/fraud_free_transactions", true);
         LMDB_RESOURCE(top_10_largest_transactions, render_GET, "/top10/transactions", true);
+        LMDB_RESOURCE(top_10_cities_online_merchant, render_GET, "top10/cities/online_merchants", true);
+
+        class queries : public clean_resource
+        {
+            Ref<lmdb::env> p_env;
+            nlohmann::json_schema::json_validator p_validator{};
+        public:
+            queries(const Ref<Statistics>& stat_data, std::shared_ptr<lmdb::env> env) :
+                clean_resource("/query", true, stat_data), p_env(std::move(env))
+            {
+                std::ifstream schema("data/schema.json", std::ios::in);
+                nlohmann::json j;
+                schema >> j;
+                schema.close();
+                p_validator.set_root_schema(j);
+            }
+
+            const Ref<http_response> render(const http_request& req) override
+            {
+                return log_response(process(log_request(req)));
+            }
+
+            const Ref<http_response> process(const http_request& req);
+        };
     }
 
     std::vector<Ref<clean_resource>> resources(const Ref<PerfData>& perf_data, const Ref<Statistics>& stat_data, Ref<lmdb::env>& env);
