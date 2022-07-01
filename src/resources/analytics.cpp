@@ -5,6 +5,7 @@
 #include <optional>
 #include <iomanip>
 #include <filesystem>
+#include <execution>
 
 #include <spdlog/spdlog.h>
 #include <nlohmann/json.hpp>
@@ -12,6 +13,7 @@
 #include "models.hpp"
 #include "helpers/xml_builder.hpp"
 #include "helpers/utilities.hpp"
+#include "helpers/span.hpp"
 
 using namespace std::literals;
 
@@ -645,6 +647,7 @@ namespace resources::analytics
     };
 
     using TransactionList = std::vector<models::Transaction>;
+    using TransactionRefList = std::vector<models::Transaction const*>;
 
     template<typename T>
     bool check_field_against_selector(const QuerySelector& selector, T field)
@@ -657,7 +660,7 @@ namespace resources::analytics
                 if constexpr(std::is_same_v<std::string, Type> || std::is_same_v<std::string_view, Type>)
                 {
                     std::string res = v;
-                    std::transform(res.begin(), res.end(), res.begin(), ::tolower);
+                    //std::transform(res.begin(), res.end(), res.begin(), ::tolower);
                     return res;
                 }
                 else if constexpr(std::is_same_v<Location, Type>)
@@ -797,6 +800,9 @@ namespace resources::analytics
         if (strict && (transaction.is_fraud || !transaction.errors.empty()))
             return true;
 
+        if (selectors.empty())
+            return false;
+
         auto user = User::get(transaction.user_id, transaction.card_id, user_cursor, card_cursor);
         auto merchant = Merchant::get(transaction.merchant_id, merchant_cursor);
 
@@ -854,7 +860,7 @@ namespace resources::analytics
         return false;
     }
 
-    bool validate_list_against_properties(const TransactionList& transactions, lmdb::cursor& user_cursor, lmdb::cursor& card_cursor, lmdb::cursor& merchant_cursor, const std::vector<QueryProperty>& properties)
+    bool validate_list_against_properties(const TransactionRefList& transactions, lmdb::cursor& user_cursor, lmdb::cursor& card_cursor, lmdb::cursor& merchant_cursor, const std::vector<QueryProperty>& properties)
     {
         for (const auto& property : properties)
         {
@@ -862,7 +868,7 @@ namespace resources::analytics
             {
                 for (const auto& transaction : transactions)
                 {
-                    if (!should_skip_transaction(transaction, user_cursor, card_cursor, merchant_cursor, false, { property.selector }))
+                    if (!should_skip_transaction(*transaction, user_cursor, card_cursor, merchant_cursor, false, { property.selector }))
                         return true;
                 }
                 return false;
@@ -963,11 +969,11 @@ namespace resources::analytics
     {
         Order order;
 
-        bool operator()(const models::Transaction& a, const models::Transaction& b) const
+        bool operator()(models::Transaction const* a, models::Transaction const* b) const
         {
             return order == Order::Descending ?
-                   std::greater<long>{}(a.amount, b.amount) :
-                   std::less<long>{}(a.amount, b.amount);
+                   std::greater<long>{}(a->amount, b->amount) :
+                   std::less<long>{}(a->amount, b->amount);
         }
     };
 
@@ -976,7 +982,7 @@ namespace resources::analytics
     {
         Order order;
 
-        using comparisonType = std::pair<T, TransactionList>;
+        using comparisonType = std::pair<T, TransactionRefList>;
 
         bool operator()(const comparisonType& a, const comparisonType& b) const
         {
@@ -986,8 +992,316 @@ namespace resources::analytics
         }
     };
 
+    static bool processed = false;
+    static TransactionList transactions;
+
     template<typename Key, typename Sort = sort_by_count<Key>>
-    using count_set = std::set<std::pair<Key, TransactionList>, Sort>;
+    using count_set = std::set<std::pair<Key, TransactionRefList>, Sort>;
+
+    void read_transactions()
+    {
+        if (processed)
+            return;
+
+        std::ifstream data("data/transactions.csv");
+        std::string line;
+        // Skip Header
+        std::getline(data, line);
+
+        while (std::getline(data, line))
+        {
+            auto transaction = parse_transaction(line);
+            transactions.push_back(transaction);
+        }
+
+        processed = true;
+    }
+
+    namespace fs = std::filesystem;
+    struct processor
+    {
+
+        bool count_only;
+        TransactionQueryOptions& options;
+
+        lmdb::txn rtxn;
+        lmdb::cursor user_cursor;
+        lmdb::cursor card_cursor;
+        lmdb::cursor merchant_cursor;
+
+        virtual std::string_view name() = 0;
+
+        processor(TransactionQueryOptions& options, lmdb::env& env, bool count_only)
+            : count_only(count_only), options(options), rtxn(lmdb::txn::begin(env, nullptr, MDB_RDONLY)),
+              user_cursor(nullptr), card_cursor(nullptr), merchant_cursor(nullptr)
+        {
+            auto user_dbi = lmdb::dbi::open(rtxn, "users");
+            auto card_dbi = lmdb::dbi::open(rtxn, "cards");
+            auto merchant_dbi = lmdb::dbi::open(rtxn, "merchants");
+            user_cursor = lmdb::cursor::open(rtxn, user_dbi);
+            card_cursor = lmdb::cursor::open(rtxn, card_dbi);
+            merchant_cursor = lmdb::cursor::open(rtxn, merchant_dbi);
+        }
+
+        Ref<http_response> run()
+        {
+            if (!fs::exists("cache"))
+                fs::create_directory("cache");
+
+            if (options.selectors.empty() && options.properties.empty())
+            {
+                std::stringstream ss_name;
+                ss_name << name();
+                if (!count_only && options.count > 0)
+                    ss_name << "_" << options.count;
+                if (!count_only)
+                    ss_name << "_" << (options.order == Order::Descending ? "descending" : "ascending");
+                if (options.verbose && !count_only)
+                    ss_name << "_verbose";
+                if (options.strict)
+                    ss_name << "_strict";
+                if (options.pretty)
+                    ss_name << "_pretty";
+                if (count_only)
+                    ss_name << "_count";
+                if (XmlBuilder::can_sign())
+                    ss_name << "_signed";
+                ss_name << ".xml";
+                p_cache_file = fs::path("cache") / ss_name.str();
+
+                if (fs::exists(p_cache_file))
+                    return std::make_shared<httpserver::file_response>(p_cache_file.string(), 200, "application/xml");
+            }
+
+            read_transactions();
+
+            return process();
+        }
+
+        void write_cache(const std::string_view& xml)
+        {
+            if (options.selectors.empty() && options.properties.empty())
+            {
+                std::ofstream out(p_cache_file, std::ios::out | std::ios::trunc);
+                out.write(xml.data(), (std::streamsize)xml.size());
+                out.close();
+            }
+        }
+
+        virtual Ref<http_response> process() = 0;
+
+        virtual ~processor()
+        {
+            user_cursor.close();
+            card_cursor.close();
+            merchant_cursor.close();
+            rtxn.abort();
+        }
+
+    private:
+        fs::path p_cache_file;
+    };
+
+    struct merchant_processor : public processor
+    {
+        merchant_processor(TransactionQueryOptions& options, lmdb::env& env, bool count_only)
+            : processor(options, env, count_only)
+        {}
+
+        std::string_view name() override { return "merchants"; }
+
+        Ref<http_response> process() override
+        {
+            std::map<int64_t, TransactionRefList> transactions_by_merchant;
+
+            for (const auto& item : transactions) try
+            {
+                if (should_skip_transaction(item, user_cursor, card_cursor, merchant_cursor, options.strict,
+                        options.selectors))
+                    continue;
+
+                if (transactions_by_merchant.count(item.merchant_id))
+                    transactions_by_merchant.emplace(item.merchant_id, TransactionRefList{});
+                transactions_by_merchant[item.merchant_id].push_back(&item);
+            }
+            catch (std::exception& ex)
+            {
+                return util::make_xml_error(ex.what(), 400);
+            }
+
+            if (!options.properties.empty())
+            {
+                for (const auto& [merchant, transact_list] : transactions_by_merchant)
+                {
+                    if (!validate_list_against_properties(transact_list, user_cursor, card_cursor, merchant_cursor,
+                            options.properties))
+                        transactions_by_merchant.erase(merchant);
+                }
+            }
+
+            if (!count_only)
+            {
+                for (auto& [_, transact_list] : transactions_by_merchant)
+                {
+                    std::sort(std::execution::par, transact_list.begin(), transact_list.end(), sort_by_amount{ options.order });
+                    if (options.count > 0 && options.count < transact_list.size())
+                        transact_list.erase(transact_list.begin() + options.count, transact_list.end());
+                }
+            }
+            else
+            {
+                count_set<int64_t> s(transactions_by_merchant.begin(), transactions_by_merchant.end(), sort_by_count<int64_t>{options.order});
+                if (options.count > 0)
+                {
+                    auto iter = s.begin();
+                    for (int i = 0; i < options.count && i < s.size(); ++i)
+                        iter++;
+                    s.erase(iter, s.end());
+                }
+
+                XmlBuilder b;
+                b
+                        .add_signature()
+                        .add_child("Data")
+                        .add_child("Counts", {
+                                {"order", options.order == Order::Ascending ? "ascending" : "descending"},
+                                {"groupedBy", "merchant"},
+                                {"strict", options.strict ? "true" : "false"}
+                        });
+                for (const auto& [merchant, transact_list] : s)
+                    b.add_string("Count", {{"merchant", std::to_string(merchant)}}, std::to_string(transact_list.size()));
+
+                std::string xml = b.serialize(options.pretty);
+                write_cache(xml);
+                return std::make_shared<string_response>(xml, 200, "application/xml");
+            }
+
+            XmlBuilder::attribute_map attributes {
+                    {"order", options.order == Order::Descending ? "descending" : "ascending"},
+                    {"verbose", options.verbose ? "true" : "false"},
+                    {"strict", options.strict ? "true" : "false"},
+                    {"groupedBy", "merchant"}
+            };
+
+            if (options.count > 0)
+                attributes.emplace("count", std::to_string(options.count));
+
+            XmlBuilder builder;
+            builder
+                    .add_signature()
+                    .add_child("Data")
+                    .add_iterator("Results", attributes, transactions_by_merchant.begin(), transactions_by_merchant.end(), [&, &verbose = options.verbose](XmlBuilder& b, const auto& pair) {
+                        auto& [merchant, transact_list] = pair;
+                        b.add_child("Merchant", {{ "id", std::to_string(merchant) }});
+                        b.add_array("Transactions", transact_list, [&](XmlBuilder& b, models::Transaction const* t) {
+                            b.add_child("Transaction", {{"fraud", t->is_fraud ? "true" : "false"}});
+                            serialize_amount(b, t->amount);
+                            if (verbose)
+                                serialize_user_card(b, t->user_id, t->card_id, user_cursor, card_cursor);
+                            else
+                                serialize_user_card(b, t->user_id, t->card_id);
+                            serialize_date(b, t->time);
+                            serialize_transaction_type(b, t->type);
+                            if (verbose)
+                                serialize_merchant(b, t->merchant_id, merchant_cursor);
+                            else
+                                serialize_merchant(b, t->merchant_id, t->mcc);
+                            if (!t->errors.empty())
+                            {
+                                b.add_array("Errors", t->errors, [](XmlBuilder& b, const auto& s) {
+                                    b.add_string("Error", s);
+                                });
+                            }
+                            b.step_up();
+                        });
+                        b.step_up();
+                    });
+
+            std::string xml = builder.serialize(options.pretty);
+            write_cache(xml);
+            return std::make_shared<string_response>(xml, 200, "application/xml");
+        }
+    };
+
+    struct unique_merchant_processor : public processor
+    {
+        unique_merchant_processor(TransactionQueryOptions& options, lmdb::env& env, bool count_only)
+            : processor(options, env, count_only)
+        {}
+
+        std::string_view name() override { return "unique_merchants"; }
+
+        Ref<http_response> process() override
+        {
+            std::set<int64_t> unique_merchants;
+
+            for (const auto& item : transactions)
+                unique_merchants.insert(item.merchant_id);
+
+            XmlBuilder b;
+            b
+                .add_signature()
+                .add_child("Data")
+                .add_string("UniqueMerchants", std::to_string(unique_merchants.size()));
+
+            std::string xml = b.serialize(options.pretty);
+            write_cache(xml);
+            return std::make_shared<string_response>(xml, 200, "application/xml");
+        }
+    };
+
+    struct insuff_bal_percentage : public processor
+    {
+        insuff_bal_percentage(TransactionQueryOptions& options, lmdb::env& env, bool count_only)
+            : processor(options, env, count_only)
+        {}
+
+        std::string_view name() override { return "insuff_bal_percentage"; }
+
+        Ref<http_response> process() override
+        {
+            std::set<uint16_t> no_insuff;
+            std::set<uint16_t> one_insuff;
+            std::set<uint16_t> more_insuff;
+
+            for (const auto& item : transactions)
+            {
+                if (std::find_if(item.errors.begin(), item.errors.end(), [](const auto& i) { return i == "Insufficient Balance"; }) == item.errors.end())
+                {
+                    if (!no_insuff.count(item.user_id) && !one_insuff.count(item.user_id))
+                        no_insuff.insert(item.user_id);
+                }
+                else
+                {
+                    if (no_insuff.count(item.user_id))
+                        no_insuff.erase(item.user_id);
+
+                    if (!one_insuff.count(item.user_id))
+                        one_insuff.insert(item.user_id);
+                    else if (!more_insuff.count(item.user_id))
+                        more_insuff.insert(item.user_id);
+                }
+            }
+
+            auto total = (double)(one_insuff.size() + no_insuff.size());
+            auto atLeastOnePercentage = ((double)one_insuff.size() / total) * 100;
+            auto moreThanOnePercentage = ((double)more_insuff.size() / total) * 100;
+            auto nonePercentage = ((double)no_insuff.size() / total) * 100;
+
+            XmlBuilder b;
+            b
+                .add_signature()
+                .add_child("Data")
+                    .add_child("Percentages", {{ "by", "user" }, { "field", "Insufficient Balance" }})
+                        .add_string("AtLeastOne", std::to_string(atLeastOnePercentage) + "%")
+                        .add_string("MoreThanOne", std::to_string(moreThanOnePercentage) + "%")
+                        .add_string("None", std::to_string(nonePercentage) + "%");
+
+            std::string xml = b.serialize(options.pretty);
+            write_cache(xml);
+            return std::make_shared<string_response>(xml, 200, "application/xml");
+        }
+    };
 
     const Ref<http_response> process_cities(TransactionQueryOptions& options, lmdb::env& env, bool count_only)
     {
@@ -1022,7 +1336,7 @@ namespace resources::analytics
                 return std::make_shared<httpserver::file_response>(cache_file.string(), 200, "application/xml");
         }
 
-        std::map<std::string, std::vector<models::Transaction>> transactions_by_city;
+        std::map<std::string, TransactionRefList> transactions_by_city;
 
         auto rtxn = lmdb::txn::begin(env, nullptr, MDB_RDONLY);
         auto user_dbi = lmdb::dbi::open(rtxn, "users");
@@ -1032,46 +1346,47 @@ namespace resources::analytics
         auto card_cursor = lmdb::cursor::open(rtxn, card_dbi);
         auto merchant_cursor = lmdb::cursor::open(rtxn, merchant_dbi);
 
-        std::ifstream data("data/transactions.csv");
-        std::string line;
-        // Skip Header
-        std::getline(data, line);
+        read_transactions();
 
-        while (std::getline(data, line))
+        for (const auto& item : transactions)
         {
-            auto transaction = parse_transaction(line);
-
             try
             {
-                if (should_skip_transaction(transaction, user_cursor, card_cursor, merchant_cursor, options.strict, options.selectors))
+                if (should_skip_transaction(item, user_cursor, card_cursor, merchant_cursor, options.strict,
+                        options.selectors))
                     continue;
+
+                if (item.merchant_city.empty())
+                    continue;
+
+                if (!transactions_by_city.count(item.merchant_city))
+                    transactions_by_city.emplace(item.merchant_city, std::vector<models::Transaction const*>{});
+                transactions_by_city[item.merchant_city].push_back(&item);
             }
             catch (std::exception& ex)
             {
                 return util::make_xml_error(ex.what(), 400);
             }
-
-            if (transaction.merchant_city.empty())
-                continue;
-
-            if (!transactions_by_city.count(transaction.merchant_city))
-                transactions_by_city.emplace(transaction.merchant_city, std::vector<models::Transaction>{});
-
-            transactions_by_city[transaction.merchant_city].push_back(transaction);
         }
 
-        for (const auto& [city, transactions] : transactions_by_city)
+        if (!options.properties.empty())
         {
-            if (!validate_list_against_properties(transactions, user_cursor, card_cursor, merchant_cursor, options.properties))
-                transactions_by_city.erase(city);
+            for (auto iter = transactions_by_city.begin(); iter != transactions_by_city.end();)
+            {
+                if (!validate_list_against_properties(iter->second, user_cursor, card_cursor, merchant_cursor,
+                        options.properties))
+                    iter = transactions_by_city.erase(iter);
+                else
+                    ++iter;
+            }
         }
 
         if (!count_only)
         {
             for (auto& pair : transactions_by_city)
             {
-                std::sort(pair.second.begin(), pair.second.end(), sort_by_amount{ options.order });
-                if (options.count > 0)
+                std::sort(std::execution::par, pair.second.begin(), pair.second.end(), sort_by_amount{ options.order });
+                if (options.count > 0 && options.count < pair.second.size())
                     pair.second.erase(pair.second.begin() + options.count, pair.second.end());
             }
         }
@@ -1081,7 +1396,7 @@ namespace resources::analytics
             if (options.count > 0)
             {
                 auto iter = s.begin();
-                for (int i = 0; i < options.count; ++i)
+                for (int i = 0; i < options.count && i < s.size(); ++i)
                     iter++;
                 s.erase(iter, s.end());
             }
@@ -1095,8 +1410,8 @@ namespace resources::analytics
                             {"groupedBy", "cities"},
                             {"strict", options.strict ? "true" : "false"}
                     });
-            for (const auto& [city, transactions] : s)
-                b.add_string("Count", {{"city", city}}, std::to_string(transactions.size()));
+            for (const auto& [city, transact_list] : s)
+                b.add_string("Count", {{"city", city}}, std::to_string(transact_list.size()));
 
             std::string xml = b.serialize(options.pretty);
             if (options.selectors.empty() && options.properties.empty())
@@ -1123,24 +1438,24 @@ namespace resources::analytics
             .add_signature()
             .add_child("Data")
                 .add_iterator("Results", attributes, transactions_by_city.begin(), transactions_by_city.end(), [&, &verbose = options.verbose](XmlBuilder& b, const auto& pair) {
-                    auto& [city, transactions] = pair;
+                    auto& [city, transact_list] = pair;
                     b.add_child(city);
-                    b.add_array("Transactions", transactions, [&](XmlBuilder& b, const models::Transaction& t) {
-                        b.add_child("Transaction", {{"fraud", t.is_fraud ? "true" : "false"}});
-                        serialize_amount(b, t.amount);
+                    b.add_array("Transactions", transact_list, [&](XmlBuilder& b, models::Transaction const* t) {
+                        b.add_child("Transaction", {{"fraud", t->is_fraud ? "true" : "false"}});
+                        serialize_amount(b, t->amount);
                         if (verbose)
-                            serialize_user_card(b, t.user_id, t.card_id, user_cursor, card_cursor);
+                            serialize_user_card(b, t->user_id, t->card_id, user_cursor, card_cursor);
                         else
-                            serialize_user_card(b, t.user_id, t.card_id);
-                        serialize_date(b, t.time);
-                        serialize_transaction_type(b, t.type);
+                            serialize_user_card(b, t->user_id, t->card_id);
+                        serialize_date(b, t->time);
+                        serialize_transaction_type(b, t->type);
                         if (verbose)
-                            serialize_merchant(b, t.merchant_id, merchant_cursor);
+                            serialize_merchant(b, t->merchant_id, merchant_cursor);
                         else
-                            serialize_merchant(b, t.merchant_id, t.mcc);
-                        if (!t.errors.empty())
+                            serialize_merchant(b, t->merchant_id, t->mcc);
+                        if (!t->errors.empty())
                         {
-                            b.add_array("Errors", t.errors, [](XmlBuilder& b, const auto& s) {
+                            b.add_array("Errors", t->errors, [](XmlBuilder& b, const auto& s) {
                                 b.add_string("Error", s);
                             });
                         }
@@ -1213,7 +1528,7 @@ namespace resources::analytics
                 return std::make_shared<httpserver::file_response>(cache_file.string(), 200, "application/xml");
         }
 
-        std::map<int, std::vector<models::Transaction>> transactions_by_month;
+        std::map<int, TransactionRefList> transactions_by_month;
 
         auto rtxn = lmdb::txn::begin(env, nullptr, MDB_RDONLY);
         auto user_dbi = lmdb::dbi::open(rtxn, "users");
@@ -1223,39 +1538,34 @@ namespace resources::analytics
         auto card_cursor = lmdb::cursor::open(rtxn, card_dbi);
         auto merchant_cursor = lmdb::cursor::open(rtxn, merchant_dbi);
 
-        std::ifstream data("data/transactions.csv");
-        std::string line;
-        // Skip Header
-        std::getline(data, line);
+        read_transactions();
 
-        while (std::getline(data, line))
+        for (const auto& item : transactions)
         {
-            auto transaction = parse_transaction(line);
-
             try
             {
-                if (should_skip_transaction(transaction, user_cursor, card_cursor, merchant_cursor, options.strict, options.selectors))
+                if (should_skip_transaction(item, user_cursor, card_cursor, merchant_cursor, options.strict, options.selectors))
                     continue;
+
+                struct tm* ptm = gmtime(&item.time);
+                auto month = ptm->tm_mon;
+
+                if (!transactions_by_month.count(month))
+                    transactions_by_month.emplace(month, TransactionRefList {});
+
+                transactions_by_month[month].push_back(&item);
             }
             catch (std::exception& ex)
             {
                 return util::make_xml_error(ex.what(), 400);
             }
-
-            struct tm* ptm = gmtime(&transaction.time);
-            auto month = ptm->tm_mon;
-
-            if (!transactions_by_month.count(month))
-                transactions_by_month.emplace(month, std::vector<models::Transaction>{});
-
-            transactions_by_month[month].push_back(transaction);
         }
 
         if (!count_only)
         {
             for (auto& pair : transactions_by_month)
             {
-                std::sort(pair.second.begin(), pair.second.end(), sort_by_amount{ options.order });
+                std::sort(std::execution::par, pair.second.begin(), pair.second.end(), sort_by_amount{ options.order });
                 if (options.count > 0)
                     pair.second.erase(pair.second.begin() + options.count, pair.second.end());
             }
@@ -1281,8 +1591,8 @@ namespace resources::analytics
                             {"groupedBy", "months"},
                             {"strict", options.strict ? "true" : "false"}
                         });
-            for (const auto& [month, transactions] : s)
-                b.add_string("Count", {{"month", months[month]}}, std::to_string(transactions.size()));
+            for (const auto& [month, transact_list] : s)
+                b.add_string("Count", {{"month", months[month]}}, std::to_string(transact_list.size()));
 
             std::string xml = b.serialize(options.pretty);
             if (options.selectors.empty() && options.properties.empty())
@@ -1308,24 +1618,24 @@ namespace resources::analytics
                 .add_signature()
                 .add_child("Data")
                 .add_iterator("Results", attributes, transactions_by_month.begin(), transactions_by_month.end(), [&, &verbose = options.verbose](XmlBuilder& b, const auto& pair) {
-                    auto& [month, transactions] = pair;
+                    auto& [month, transact_list] = pair;
                     b.add_child(months[month]);
-                    b.add_array("Transactions", transactions, [&](XmlBuilder& b, const models::Transaction& t) {
-                        b.add_child("Transaction", {{"fraud", t.is_fraud ? "true" : "false"}});
-                        serialize_amount(b, t.amount);
+                    b.add_array("Transactions", transact_list, [&](XmlBuilder& b, models::Transaction const* t) {
+                        b.add_child("Transaction", {{"fraud", t->is_fraud ? "true" : "false"}});
+                        serialize_amount(b, t->amount);
                         if (verbose)
-                            serialize_user_card(b, t.user_id, t.card_id, user_cursor, card_cursor);
+                            serialize_user_card(b, t->user_id, t->card_id, user_cursor, card_cursor);
                         else
-                            serialize_user_card(b, t.user_id, t.card_id);
-                        serialize_date(b, t.time);
-                        serialize_transaction_type(b, t.type);
+                            serialize_user_card(b, t->user_id, t->card_id);
+                        serialize_date(b, t->time);
+                        serialize_transaction_type(b, t->type);
                         if (verbose)
-                            serialize_merchant(b, t.merchant_id, merchant_cursor);
+                            serialize_merchant(b, t->merchant_id, merchant_cursor);
                         else
-                            serialize_merchant(b, t.merchant_id, t.mcc);
-                        if (!t.errors.empty())
+                            serialize_merchant(b, t->merchant_id, t->mcc);
+                        if (!t->errors.empty())
                         {
-                            b.add_array("Errors", t.errors, [](XmlBuilder& b, const auto& s) {
+                            b.add_array("Errors", t->errors, [](XmlBuilder& b, const auto& s) {
                                 b.add_string("Error", s);
                             });
                         }
@@ -1383,7 +1693,7 @@ namespace resources::analytics
                 return std::make_shared<httpserver::file_response>(cache_file.string(), 200, "application/xml");
         }
 
-        std::map<std::string, std::vector<models::Transaction>> transactions_by_state;
+        std::map<std::string, TransactionRefList> transactions_by_state;
 
         auto rtxn = lmdb::txn::begin(env, nullptr, MDB_RDONLY);
         auto user_dbi = lmdb::dbi::open(rtxn, "users");
@@ -1393,49 +1703,48 @@ namespace resources::analytics
         auto card_cursor = lmdb::cursor::open(rtxn, card_dbi);
         auto merchant_cursor = lmdb::cursor::open(rtxn, merchant_dbi);
 
-        std::ifstream data("data/transactions.csv");
-        std::string line;
-        // Skip Header
-        std::getline(data, line);
+        read_transactions();
 
-        while (std::getline(data, line))
+        for (const auto& item : transactions)
         {
-            auto transaction = parse_transaction(line);
-
             try
             {
-                if (should_skip_transaction(transaction, user_cursor, card_cursor, merchant_cursor, options.strict, options.selectors))
+                if (should_skip_transaction(item, user_cursor, card_cursor, merchant_cursor, options.strict, options.selectors))
                     continue;
+
+                if (item.merchant_state.empty())
+                    continue;
+
+                // Not a state abbreviation, must be a country
+                if (item.merchant_state.size() > 2)
+                    continue;
+
+                if (!transactions_by_state.count(item.merchant_state))
+                    transactions_by_state.emplace(item.merchant_state, TransactionRefList{});
+
+                transactions_by_state[item.merchant_state].push_back(&item);
             }
             catch (std::exception& ex)
             {
                 return util::make_xml_error(ex.what(), 400);
             }
-
-            if (transaction.merchant_state.empty())
-                continue;
-
-            // Not a state abbreviation, must be a country
-            if (transaction.merchant_state.size() > 2)
-                continue;
-
-            if (!transactions_by_state.count(transaction.merchant_state))
-                transactions_by_state.emplace(transaction.merchant_state, std::vector<models::Transaction>{});
-
-            transactions_by_state[transaction.merchant_state].push_back(transaction);
         }
 
-        for (const auto& [state, transactions] : transactions_by_state)
+        if (!options.properties.empty())
         {
-            if (!validate_list_against_properties(transactions, user_cursor, card_cursor, merchant_cursor, options.properties))
-                transactions_by_state.erase(state);
+            for (const auto& [state, transact_list]: transactions_by_state)
+            {
+                if (!validate_list_against_properties(transact_list, user_cursor, card_cursor, merchant_cursor,
+                        options.properties))
+                    transactions_by_state.erase(state);
+            }
         }
 
         if (!count_only)
         {
             for (auto& pair : transactions_by_state)
             {
-                std::sort(pair.second.begin(), pair.second.end(), sort_by_amount{ options.order });
+                std::sort(std::execution::par, pair.second.begin(), pair.second.end(), sort_by_amount{ options.order });
                 if (options.count > 0)
                     pair.second.erase(pair.second.begin() + options.count, pair.second.end());
             }
@@ -1461,8 +1770,8 @@ namespace resources::analytics
                         {"groupedBy", "states"},
                         {"strict", options.strict ? "true" : "false"}
                     });
-            for (const auto& [state, transactions] : s)
-                b.add_string("Count", {{"state", state}}, std::to_string(transactions.size()));
+            for (const auto& [state, transact_list] : s)
+                b.add_string("Count", {{"state", state}}, std::to_string(transact_list.size()));
 
             std::string xml = b.serialize(options.pretty);
             if (options.selectors.empty() && options.properties.empty())
@@ -1488,24 +1797,24 @@ namespace resources::analytics
             .add_signature()
             .add_child("Data")
                 .add_iterator("Results", attributes, transactions_by_state.begin(), transactions_by_state.end(), [&, &verbose = options.verbose](XmlBuilder& b, const auto& pair) {
-                    auto& [state, transactions] = pair;
+                    auto& [state, transact_list] = pair;
                     b.add_child(state);
-                    b.add_array("Transactions", transactions, [&](XmlBuilder& b, const models::Transaction& t) {
-                        b.add_child("Transaction", {{"fraud", t.is_fraud ? "true" : "false"}});
-                        serialize_amount(b, t.amount);
+                    b.add_array("Transactions", transact_list, [&](XmlBuilder& b, models::Transaction const* t) {
+                        b.add_child("Transaction", {{"fraud", t->is_fraud ? "true" : "false"}});
+                        serialize_amount(b, t->amount);
                         if (verbose)
-                            serialize_user_card(b, t.user_id, t.card_id, user_cursor, card_cursor);
+                            serialize_user_card(b, t->user_id, t->card_id, user_cursor, card_cursor);
                         else
-                            serialize_user_card(b, t.user_id, t.card_id);
-                        serialize_date(b, t.time);
-                        serialize_transaction_type(b, t.type);
+                            serialize_user_card(b, t->user_id, t->card_id);
+                        serialize_date(b, t->time);
+                        serialize_transaction_type(b, t->type);
                         if (verbose)
-                            serialize_merchant(b, t.merchant_id, merchant_cursor);
+                            serialize_merchant(b, t->merchant_id, merchant_cursor);
                         else
-                            serialize_merchant(b, t.merchant_id, t.mcc);
-                        if (!t.errors.empty())
+                            serialize_merchant(b, t->merchant_id, t->mcc);
+                        if (!t->errors.empty())
                         {
-                            b.add_array("Errors", t.errors, [](XmlBuilder& b, const auto& s) {
+                            b.add_array("Errors", t->errors, [](XmlBuilder& b, const auto& s) {
                                 b.add_string("Error", s);
                             });
                         }
@@ -1565,7 +1874,7 @@ namespace resources::analytics
                 return std::make_shared<httpserver::file_response>(cache_file.string(), 200, "application/xml");
         }
 
-        std::vector<models::Transaction> transactions;
+        TransactionRefList transact_list;
 
         auto rtxn = lmdb::txn::begin(env, nullptr, MDB_RDONLY);
         auto user_dbi = lmdb::dbi::open(rtxn, "users");
@@ -1575,30 +1884,24 @@ namespace resources::analytics
         auto card_cursor = lmdb::cursor::open(rtxn, card_dbi);
         auto merchant_cursor = lmdb::cursor::open(rtxn, merchant_dbi);
 
-        std::ifstream data("data/transactions.csv");
-        std::string line;
-        // Skip Header
-        std::getline(data, line);
+        read_transactions();
 
-        while (std::getline(data, line))
+        for (const auto& item : transactions)
         {
-            auto transaction = parse_transaction(line);
-
             try
             {
-                if (should_skip_transaction(transaction, user_cursor, card_cursor, merchant_cursor, options.strict, options.selectors))
+                if (should_skip_transaction(item, user_cursor, card_cursor, merchant_cursor, options.strict, options.selectors))
                     continue;
+                transact_list.push_back(&item);
             }
             catch (std::exception& ex)
             {
                 return util::make_xml_error(ex.what(), 400);
             }
-
-            transactions.push_back(transaction);
         }
 
-        if (!count_only) std::sort(transactions.begin(), transactions.end(), sort_by_amount{options.order});
-        if (options.count > 0) transactions.erase(transactions.begin() + options.count, transactions.end());
+        if (!count_only) std::sort(std::execution::par, transact_list.begin(), transact_list.end(), sort_by_amount{options.order});
+        if (options.count > 0) transact_list.erase(transact_list.begin() + options.count, transact_list.end());
 
         if (count_only)
         {
@@ -1606,7 +1909,7 @@ namespace resources::analytics
             b
                 .add_signature()
                 .add_child("Data")
-                    .add_string("Count", {{"strict", options.strict ? "true" : "false"}}, std::to_string(transactions.size()));
+                    .add_string("Count", {{"strict", options.strict ? "true" : "false"}}, std::to_string(transact_list.size()));
 
             std::string xml = b.serialize(options.pretty);
 
@@ -1631,23 +1934,23 @@ namespace resources::analytics
         builder
             .add_signature()
             .add_child("Data")
-                .add_iterator("Transactions", attributes, transactions.begin(), transactions.end(), [&, &verbose = options.verbose](XmlBuilder& b, const models::Transaction& t) {
-                    b.add_child("Transaction", {{"fraud", t.is_fraud ? "true" : "false"}});
-                    serialize_amount(b, t.amount);
+                .add_iterator("Transactions", attributes, transact_list.begin(), transact_list.end(), [&, &verbose = options.verbose](XmlBuilder& b, models::Transaction const* t) {
+                    b.add_child("Transaction", {{"fraud", t->is_fraud ? "true" : "false"}});
+                    serialize_amount(b, t->amount);
                     if (verbose)
-                        serialize_user_card(b, t.user_id, t.card_id, user_cursor, card_cursor);
+                        serialize_user_card(b, t->user_id, t->card_id, user_cursor, card_cursor);
                     else
-                        serialize_user_card(b, t.user_id, t.card_id);
-                    serialize_date(b, t.time);
-                    serialize_transaction_type(b, t.type);
+                        serialize_user_card(b, t->user_id, t->card_id);
+                    serialize_date(b, t->time);
+                    serialize_transaction_type(b, t->type);
                     if (verbose)
-                        serialize_merchant(b, t.merchant_id, merchant_cursor);
+                        serialize_merchant(b, t->merchant_id, merchant_cursor);
                     else
-                        serialize_merchant(b, t.merchant_id, t.mcc);
-                    serialize_location(b, t.merchant_city, t.merchant_state, t.zip);
-                    if (!t.errors.empty())
+                        serialize_merchant(b, t->merchant_id, t->mcc);
+                    serialize_location(b, t->merchant_city, t->merchant_state, t->zip);
+                    if (!t->errors.empty())
                     {
-                        b.add_array("Errors", t.errors, [](XmlBuilder& b, const auto& s) {
+                        b.add_array("Errors", t->errors, [](XmlBuilder& b, const auto& s) {
                             b.add_string("Error", s);
                         });
                     }
@@ -1889,6 +2192,12 @@ namespace resources::analytics
             return process_months(options, *p_env, count_only);
         else if (query_type == "city" || query_type == "cities")
             return process_cities(options, *p_env, count_only);
+        else if (query_type == "merchant" || query_type == "merchants")
+            return merchant_processor(options, *p_env, count_only).run();
+        else if (query_type == "unique_merchant" || query_type == "unique_merchants")
+            return unique_merchant_processor(options, *p_env, count_only).run();
+        else if (query_type == "insuff_bal_percentage")
+            return insuff_bal_percentage(options, *p_env, count_only).run();
 
         return util::make_xml_error("Not yet implemented!", 500);
     }

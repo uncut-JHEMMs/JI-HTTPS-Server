@@ -4,6 +4,7 @@
 #include <cstdlib>
 #include <cctype>
 #include <charconv>
+#include <vector>
 #include <memory>
 #include <cassert>
 

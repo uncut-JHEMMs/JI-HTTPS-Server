@@ -126,9 +126,11 @@ void XmlBuilder::serialize_signature(bool pretty)
     size_t sig_len;
     bytes signature;
 
-    FILE* fd = fopen(s_private_key.c_str(), "r");
-    EVP_PKEY* key = PEM_read_PrivateKey(fd, nullptr, nullptr, nullptr);
-    fclose(fd);
+    BIO* bio = BIO_new(BIO_s_mem());
+    BIO_write(bio, s_private_key.c_str(), s_private_key.size());
+
+    EVP_PKEY* key = PEM_read_bio_PrivateKey(bio, nullptr, nullptr, nullptr);
+    BIO_free(bio);
     EVP_MD_CTX* ctx = EVP_MD_CTX_new();
 
     EVP_DigestSignInit(ctx, nullptr, EVP_sha1(), nullptr, key);
@@ -143,8 +145,7 @@ void XmlBuilder::serialize_signature(bool pretty)
     std::string hash_b64 = util::base64_encode(hash.data(), hash.size());
     std::string sig_b64 = util::base64_encode(signature.data(), signature.size());
 
-    std::string cert = util::read_file(s_certificate);
-    std::string cert_b64 = util::base64_encode((const uint8_t*)cert.c_str(), cert.size());
+    std::string cert_b64 = util::base64_encode((const uint8_t*)s_certificate.c_str(), s_certificate.size());
 
     auto sig_node = xmlNewChild(xmlDocGetRootElement(p_doc), nullptr, X "Signature", nullptr);
     xmlNewProp(sig_node, X "xmlns", X "http://www.w3.org/2000/09/xmldsig#");
