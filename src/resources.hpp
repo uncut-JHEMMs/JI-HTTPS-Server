@@ -113,9 +113,11 @@ namespace resources
 
     namespace analytics
     {
+        // TODO: Merge these all of these into the `query_transactions` method.
         LMDB_RESOURCE(get_top5_transactions_by_zip, render_GET, "/top5/transactions/zip", true);
         LMDB_RESOURCE(get_top5_transactions_by_city, render_GET, "/top5/transactions/city", true);
         LMDB_RESOURCE(query_transactions, render_GET, "/query/transactions", true);
+        LMDB_RESOURCE(total_fraud_free_transactions, render_GET, "/query/fraud_free_transactions", true);
     }
 
     std::vector<Ref<clean_resource>> resources(const Ref<PerfData>& perf_data, const Ref<Statistics>& stat_data, Ref<lmdb::env>& env);

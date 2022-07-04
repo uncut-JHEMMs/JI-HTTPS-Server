@@ -805,4 +805,76 @@ namespace resources::analytics
 
         return std::make_shared<string_response>(builder.serialize(), 200, "application/xml");
     }
+
+    const Ref<http_response> total_fraud_free_transactions::process(const http_request& req)
+    {
+        std::unordered_map<std::string, int> transaction_count_by_state;
+
+        std::ifstream transactions("data/transactions.csv");
+        std::string line;
+        std::getline(transactions, line);
+        while (std::getline(transactions, line))
+        {
+            std::istringstream iss{line};
+            auto skip = [&iss](int count) {
+                std::string _;
+                for (int i = 0; i < count; ++i)
+                    std::getline(iss, _, ',');
+            };
+            auto skip_quoted = [&iss]() {
+                std::string _a;
+                do
+                {
+                    std::string _b;
+                    std::getline(iss, _b, ',');
+                    _a += _b;
+                }
+                while (!_a.empty() && _a[_a.size() - 1] != '"');
+            };
+
+            skip(10);
+            std::string state_abbrev; std::getline(iss, state_abbrev, ',');
+            skip(2);
+            skip_quoted();
+            std::string fraud_str; std::getline(iss, fraud_str, ',');
+            if (fraud_str != "No")
+                continue;
+
+            if (!transaction_count_by_state.count(state_abbrev))
+                transaction_count_by_state.emplace(state_abbrev, 1);
+            else
+                transaction_count_by_state[state_abbrev]++;
+        }
+
+        auto rtxn = lmdb::txn::begin(*p_env, nullptr, MDB_RDONLY);
+        auto state_dbi = lmdb::dbi::open(rtxn, "states");
+        auto state_cursor = lmdb::cursor::open(rtxn, state_dbi);
+
+        XmlBuilder builder;
+        builder
+            .add_signature()
+            .add_child("Data")
+            .add_iterator("FraudFreeTransactions", {{"GroupedBy", "state"}}, transaction_count_by_state.begin(), transaction_count_by_state.end(), [&](XmlBuilder& b, const auto& pair) {
+                auto [state_abbrev, count] = pair;
+                MDB_val key{state_abbrev.size(), (void*)state_abbrev.c_str()};
+                MDB_val result;
+
+                if (mdb_cursor_get(state_cursor, &key, &result, MDB_SET) == MDB_SUCCESS)
+                {
+                    auto* raw = (const uint8_t*)result.mv_data;
+                    std::string name = next_as<std::string>(raw);
+
+                    b
+                        .add_child("Result")
+                            .add_string("State", name)
+                            .add_string("Count", std::to_string(count))
+                        .step_up();
+                }
+            });
+
+        state_cursor.close();
+        rtxn.abort();
+
+        return std::make_shared<string_response>(builder.serialize(), 200, "application/xml");
+    }
 }

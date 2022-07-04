@@ -17,7 +17,8 @@ namespace resources
             std::make_shared<model::get_transaction_types>(stat_data, env),
             std::make_shared<analytics::get_top5_transactions_by_zip>(stat_data, env),
             std::make_shared<analytics::get_top5_transactions_by_city>(stat_data, env),
-            std::make_shared<analytics::query_transactions>(stat_data, env)
+            std::make_shared<analytics::query_transactions>(stat_data, env),
+            std::make_shared<analytics::total_fraud_free_transactions>(stat_data, env)
         };
     }
 
