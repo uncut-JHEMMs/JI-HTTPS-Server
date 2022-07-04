@@ -8,6 +8,8 @@
 #include <openssl/evp.h>
 #include <openssl/bio.h>
 
+#include "helpers/xml_builder.hpp"
+
 std::string util::base64_encode(const uint8_t* buffer, size_t length)
 {
     EVP_ENCODE_CTX* ctx = EVP_ENCODE_CTX_new();
@@ -36,4 +38,17 @@ std::string util::read_file(const std::string_view& filename)
         out.append(buf, 0, static_cast<unsigned long>(stream.gcount()));
     out.append(buf, 0, static_cast<unsigned long>(stream.gcount()));
     return out;
+}
+
+std::shared_ptr<httpserver::string_response> util::make_xml_error(const std::string_view& msg, int code)
+{
+    using ::httpserver::string_response;
+
+    XmlBuilder b;
+    b
+        .add_signature()
+        .add_child("Data")
+            .add_string("Error", msg);
+
+    return std::make_shared<string_response>(b.serialize(), code, "application/xml");
 }

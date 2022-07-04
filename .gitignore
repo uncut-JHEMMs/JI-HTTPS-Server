@@ -46,6 +46,9 @@ build/
 # Data directory
 data/
 
+# Cache directory
+cache/
+
 # Log directory
 logs/
 

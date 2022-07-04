@@ -8,6 +8,8 @@
 
 #include "server_opts.hpp"
 #include "resources.hpp"
+#include "helpers/utilities.hpp"
+#include "helpers/xml_builder.hpp"
 #include "monitors/perf_monitor.hpp"
 #include "monitors/stat_monitor.hpp"
 
@@ -62,6 +64,13 @@ int utopia::run(int argc, const char** argv)
             .use_ssl()
             .https_mem_key(*opts.private_key)
             .https_mem_cert(*opts.certificate);
+    }
+
+    if (opts.document_certificate.has_value() && opts.document_private_key.has_value())
+    {
+        std::string cert = util::read_file(*opts.document_certificate);
+        std::string priv = util::read_file(*opts.document_private_key);
+        XmlBuilder::initialize_signing(cert, priv);
     }
 
     if (opts.thread_per_connection)
