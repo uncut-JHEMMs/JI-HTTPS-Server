@@ -6,6 +6,7 @@
 #include <iomanip>
 #include <filesystem>
 #include <execution>
+#include <set>
 
 #include <spdlog/spdlog.h>
 #include <nlohmann/json.hpp>
@@ -13,7 +14,6 @@
 #include "models.hpp"
 #include "helpers/xml_builder.hpp"
 #include "helpers/utilities.hpp"
-#include "helpers/span.hpp"
 
 using namespace std::literals;
 
@@ -883,7 +883,7 @@ namespace resources::analytics
         dollars = amount / 100;
         cents = amount < 0 ? (amount * -1) % 100 : amount % 100;
         std::ostringstream ss;
-        ss << "$" << dollars << "." << std::setw(2) << cents;
+        ss << "$" << dollars << "." << (cents < 10 ? "0" : "") << cents;
         b.add_string("Amount", ss.str());
     }
     void serialize_user_card(XmlBuilder& b, uint16_t user_id, uint8_t card_id) {
@@ -1296,6 +1296,85 @@ namespace resources::analytics
                         .add_string("AtLeastOne", std::to_string(atLeastOnePercentage) + "%")
                         .add_string("MoreThanOne", std::to_string(moreThanOnePercentage) + "%")
                         .add_string("None", std::to_string(nonePercentage) + "%");
+
+            std::string xml = b.serialize(options.pretty);
+            write_cache(xml);
+            return std::make_shared<string_response>(xml, 200, "application/xml");
+        }
+    };
+
+    template<typename K, typename V>
+    using sortable_map = std::vector<std::pair<K, V>>;
+
+    struct recurring_transactions : public processor
+    {
+        recurring_transactions(TransactionQueryOptions& options, lmdb::env& env, bool count_only)
+            : processor(options, env, count_only)
+        {}
+
+        std::string_view name() override { return "recurring_transactions"; }
+
+        Ref<http_response> process() override
+        {
+            std::map<int64_t, std::map<long, int>> recurring_count;
+
+            for (const auto& item : transactions)
+            {
+                if (!recurring_count.count(item.merchant_id))
+                {
+                    recurring_count[item.merchant_id] = std::map<long, int>();
+                }
+
+                recurring_count[item.merchant_id][item.amount]++;
+            }
+
+            auto sort = [](const std::pair<long, int>& a, const std::pair<long, int>& b) {
+                return a.second > b.second;
+            };
+
+            std::map<int64_t, std::pair<long, int>> recurring_amount;
+
+            for (const auto& [merchant, recurrences] : recurring_count)
+            {
+                long max_amount = 0;
+                int max_count = 0;
+                for (const auto& [amount, count] : recurrences)
+                {
+                    if (count > max_count)
+                    {
+                        max_amount = amount;
+                        max_count = count;
+                    }
+                }
+
+                recurring_amount[merchant] = std::make_pair(max_amount, max_count);
+            }
+
+            sortable_map<int64_t, std::pair<long, int>> recurring_amount_sorted;
+            for (const auto& kv : recurring_amount)
+                recurring_amount_sorted.push_back(kv);
+
+            std::sort(recurring_amount_sorted.begin(), recurring_amount_sorted.end(), [](const auto& a, const auto& b) {
+                return a.second.second > b.second.second;
+            });
+
+            auto begin = recurring_amount_sorted.begin();
+            auto end = recurring_amount_sorted.begin();
+            for (int i = 0; i <= 10; ++i)
+                end++;
+
+            XmlBuilder b;
+            b
+                .add_signature()
+                .add_child("Data")
+                    .add_child("RecurringTransactions", {{ "by", "merchant" }})
+                        .add_iterator("Merchants", begin, end, [](XmlBuilder& b, const auto& pair) {
+                            b
+                                .add_child("Merchant", {{"id", std::to_string(pair.first)}});
+                            serialize_amount(b, pair.second.first);
+                            b.add_string("Count", std::to_string(pair.second.second));
+                            b.step_up();
+                        });
 
             std::string xml = b.serialize(options.pretty);
             write_cache(xml);
@@ -2198,6 +2277,8 @@ namespace resources::analytics
             return unique_merchant_processor(options, *p_env, count_only).run();
         else if (query_type == "insuff_bal_percentage")
             return insuff_bal_percentage(options, *p_env, count_only).run();
+        else if (query_type == "recurring_transactions")
+            return recurring_transactions(options, *p_env, count_only).run();
 
         return util::make_xml_error("Not yet implemented!", 500);
     }
