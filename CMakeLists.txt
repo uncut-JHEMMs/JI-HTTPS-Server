@@ -125,3 +125,4 @@ set_target_properties(
 )
 
 add_subdirectory(datagen)
+add_subdirectory(log_generator)
