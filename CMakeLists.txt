@@ -75,13 +75,15 @@ elseif (CMAKE_CXX_COMPILER_ID MATCHES ".*Clang" OR CMAKE_CXX_COMPILER_ID MATCHES
         -Wnon-virtual-dtor   # Warn the user if a class with virtual functions has a
                              # non-virtual destructor. This helps catch hard to
                              # track down memory errors
-        -Wcast-align         # Warn for potential performance problem casts
         -Wunused             # Warn on anything being unused
         -Woverloaded-virtual # Warn if you overload (not override) a virtual function
         -Wpedantic           # Warn if non-standard C++ is used
         -Wconversion         # Warn on type conversions that may lose data
         -Wsign-conversion    # Warn on sign conversions
         -Wnull-dereference   # Warn if a null dereference is detected
+
+        -Wno-macro-redefined # I intentionally redefine JSON_DIAGNOSTICS to get better
+                             # error messages
         -Wformat=2
     )
 
@@ -98,6 +100,7 @@ target_compile_options(${PROJECT_NAME} PUBLIC ${PROJECT_WARNINGS})
 
 find_package(Threads REQUIRED)
 find_package(nlohmann_json REQUIRED)
+find_package(nlohmann_json_schema_validator REQUIRED)
 find_package(spdlog REQUIRED)
 find_package(PkgConfig REQUIRED)
 find_package(LibXml2 REQUIRED)
@@ -108,9 +111,9 @@ find_library(LMDB_LIB NAMES lmdb REQUIRED)
 find_path(LMDB_INCLUDE_DIR NAMES lmdb.h REQUIRED)
 find_path(LMDB++_INCLUDE_DIR NAMES lmdb++.h REQUIRED)
 
-target_link_libraries(${PROJECT_NAME} ${LIBHTTPSERVER_LIBRARIES} ${LMDB_LIB} spdlog::spdlog nlohmann_json::nlohmann_json Threads::Threads LibXml2::LibXml2 OpenSSL::SSL OpenSSL::Crypto Faker::Faker)
+target_link_libraries(${PROJECT_NAME} ${LIBHTTPSERVER_LIBRARIES} ${LMDB_LIB} spdlog::spdlog nlohmann_json::nlohmann_json nlohmann_json_schema_validator Threads::Threads LibXml2::LibXml2 OpenSSL::SSL OpenSSL::Crypto Faker::Faker)
 target_include_directories(${PROJECT_NAME} PUBLIC ${LIBHTTPSERVER_INCLUDE_DIRS} ${LMDB_INCLUDE_DIR} ${LMDB++_INCLUDE_DIR} ${CMAKE_CURRENT_SOURCE_DIR}/src)
-target_compile_options(${PROJECT_NAME} PUBLIC ${LIBHTTPSERVER_CFLAGS_OTHER})
+target_compile_options(${PROJECT_NAME} PUBLIC ${LIBHTTPSERVER_CFLAGS_OTHER} -DJSON_DIAGNOSTICS=1)
 
 add_executable(${PROJECT_NAME}-server src/main.cpp)
 target_link_libraries(${PROJECT_NAME}-server PUBLIC ${PROJECT_NAME})

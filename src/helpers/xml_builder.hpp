@@ -29,11 +29,14 @@ public:
     XmlBuilder& add_child(const std::string_view& name);
     XmlBuilder& add_child(const std::string_view& name, const attribute_map& attributes);
 
+    XmlBuilder& add_empty(const std::string_view& name);
+    XmlBuilder& add_empty(const std::string_view& name, const attribute_map& attributes);
+
     XmlBuilder& add_signature();
 
     XmlBuilder& step_up();
 
-    std::string serialize();
+    std::string serialize(bool pretty = false);
 
     template<typename T, typename Func>
     inline XmlBuilder& add_array(const std::string_view& name, const attribute_map& attributes, const std::vector<T>& elems, Func for_each)
@@ -84,6 +87,8 @@ public:
         XmlBuilder::s_can_sign = true;
     }
 
+    inline static bool can_sign() { return s_can_sign; }
+
 private:
-    void serialize_signature();
+    void serialize_signature(bool pretty);
 };

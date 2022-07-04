@@ -66,6 +66,29 @@ struct Card
     }
 };
 
+struct Location
+{
+    std::string city;
+    std::string state;
+    uint32_t zip;
+    bool online = false;
+    bool foreign = false;
+
+    inline Buffer serialize() const
+    {
+        auto sizeInBytes = (sizeof(bool) * 2) + sizeof(uint32_t) + city.size() + state.size();
+
+        Buffer buffer{sizeInBytes};
+        buffer.write(online);
+        buffer.write(foreign);
+        buffer.write(zip);
+        buffer.write(city);
+        buffer.write(state);
+
+        return buffer;
+    }
+};
+
 struct Merchant
 {
     enum MerchantCategory : uint8_t
@@ -88,6 +111,7 @@ struct Merchant
     std::string name;
     uint mcc;
     MerchantCategory category;
+    std::vector<Location> locations;
 
     inline Buffer serialize()
     {
@@ -97,6 +121,7 @@ struct Merchant
         buffer.write(name);
         buffer.write(mcc);
         buffer.write((uint8_t)category);
+        buffer.write(locations);
 
         return buffer;
     }
